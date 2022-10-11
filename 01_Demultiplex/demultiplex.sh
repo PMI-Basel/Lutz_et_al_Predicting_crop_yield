@@ -81,30 +81,6 @@ for raw_data in $all_raw_data; do
     #running time notification
     echo ${raw_data} "demultiplexed"
 
-    #remove primers
-    #primers must be in one file (forward and reverse) in a file called primer.fasta
-    #primer.fasta must be in a folder called ${name}
-    #the first sequence is the forward primer (seq on 2nd line in file)
-    #the second sequence is the reverse primer (seq on 4th line in file)
-    #IUPAC bases allowed
-
-    # cd out
-    # ls ${name} > filenames.txt
-    # while read infile; do
-    #   outname=$(echo ${infile} | cut -f1 -d ".") #filename without .uncut.fastq
-    #   forward=$(sed '2q;d' ../${name}/primer.fasta)
-    #   reverse=$(sed '4q;d' ../${name}/primer.fasta)
-    #   cutadapt -g 'X'${forward} -o temp.fastq ${name}/${infile} #"X" = non-internal adapters
-    #   cutadapt -g 'X'${reverse} -o ${name}/${outname}.fastq temp.fastq #"X" = non-internal adapters
-    #   rm temp.fastq
-    #
-    # done < filenames.txt
-    # rm filenames.txt
-    #
-    # mkdir ${name}/uncut
-    # mv ${name}/*uncut.fastq ${name}/uncut
-    # cd ..
-
 done
 
 # running time notification
