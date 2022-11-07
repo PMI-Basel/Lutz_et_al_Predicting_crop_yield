@@ -1,0 +1,21 @@
+,baseMean,log2FoldChange,lfcSE,stat,pvalue,padj,Domain,Phylum,Class,Order,Family,Genus,Species,Guild
+OTU50,1.342411156,0.627612498,0.291563268,2.152577389,0.031351907,0.098758507,Fungi,Glomeromycota,Glomeromycetes,Glomerales,Glomeraceae,Dominikia,Dominikia iranica,Native AMF
+OTU3,18.00964288,-0.970466576,0.391539985,-2.47858868,0.013190332,0.059356493,Fungi,Glomeromycota,Glomeromycetes,Glomerales,Glomeraceae,Funneliformis,Funneliformis mosseae,Native AMF
+OTU5,7.581832809,-1.998637704,0.36305296,-5.505085822,3.69E-08,4.65E-07,Fungi,Glomeromycota,Glomeromycetes,Glomerales,Glomeraceae,Funneliformis,Funneliformis sp.,Native AMF
+OTU28,1.450836573,-0.755475403,0.28519417,-2.648986134,0.008073364,0.039124766,Fungi,Glomeromycota,Glomeromycetes,Glomerales,Glomeraceae,Funneliformis,Funneliformis sp.,Native AMF
+OTU34,1.59886979,-0.673759415,0.294111289,-2.290831538,0.021973159,0.089933666,Fungi,Glomeromycota,Glomeromycetes,Glomerales,Glomeraceae,Glomus,Glomus sp.,Native AMF
+OTU21,1.566892873,-0.972570819,0.316240992,-3.075410349,0.002102131,0.013243426,Fungi,Glomeromycota,Glomeromycetes,NA,NA,NA,NA,Native AMF
+OTU43,1.411388382,-0.607229645,0.282072124,-2.152746028,0.031338644,0.098758507,Fungi,Basidiomycota,Tremellomycetes,NA,NA,Other,NA,Other
+OTU25,1.313167043,-0.602836661,0.269682833,-2.235354227,0.025394103,0.089933666,Fungi,Glomeromycota,Paraglomeromycetes,Paraglomerales,Paraglomeraceae,Paraglomus,NA,Native AMF
+OTU2,25.14197419,5.302019845,0.345107755,15.36337499,2.88E-53,1.82E-51,Fungi,Glomeromycota,Glomeromycetes,Glomerales,Glomeraceae,Rhizoglomus (SAF22),R. irr. SAF22,Inoculated AMF
+OTU4,9.591853302,1.098415512,0.382879285,2.868829826,0.004119934,0.023595985,Fungi,Glomeromycota,Glomeromycetes,Glomerales,Glomeraceae,Rhizoglomus (SAF22),R. irr. SAF22,Inoculated AMF
+OTU9,4.253919875,2.763601495,0.332298815,8.316615571,9.05E-17,2.85E-15,Fungi,Glomeromycota,Glomeromycetes,Glomerales,Glomeraceae,Rhizoglomus (SAF22),R. irr. SAF22,Inoculated AMF
+OTU16,2.557789442,1.92497949,0.287489532,6.695824637,2.14E-11,4.50E-10,Fungi,Glomeromycota,Glomeromycetes,Glomerales,Glomeraceae,Rhizoglomus (SAF22),R. irr. SAF22,Inoculated AMF
+OTU8,4.727425722,-2.168245163,0.368568501,-5.882882435,4.03E-09,6.35E-08,Fungi,Glomeromycota,Glomeromycetes,Glomerales,Glomeraceae,Rhizophagus,Rhizophagus irregularis,Native AMF
+OTU10,3.7801574,-1.484262829,0.344206005,-4.312135203,1.62E-05,0.000145517,Fungi,Glomeromycota,Glomeromycetes,Glomerales,Glomeraceae,Rhizophagus,Rhizophagus sp.,Native AMF
+OTU13,2.20163517,-1.34752128,0.30667815,-4.393926603,1.11E-05,0.000116887,Fungi,Glomeromycota,Glomeromycetes,Glomerales,Glomeraceae,Rhizophagus,Rhizophagus irregularis,Native AMF
+OTU19,2.329215503,-1.284409207,0.315864633,-4.066328017,4.78E-05,0.000376108,Fungi,Glomeromycota,Glomeromycetes,Glomerales,Glomeraceae,Rhizophagus,Rhizophagus irregularis,Native AMF
+OTU38,1.567997151,-0.894862853,0.283054863,-3.161446663,0.001569876,0.01098913,Fungi,Glomeromycota,Glomeromycetes,Glomerales,Glomeraceae,Rhizophagus,Rhizophagus irregularis,Native AMF
+OTU49,1.459026528,-0.811203821,0.299907195,-2.704849484,0.006833535,0.035876056,Fungi,Glomeromycota,Glomeromycetes,Glomerales,Glomeraceae,Rhizophagus,Rhizophagus sp.,Native AMF
+OTU29,1.517731083,0.660237829,0.291421808,2.265574546,0.023477445,0.089933666,Fungi,Glomeromycota,Glomeromycetes,Glomerales,Glomeraceae,Septoglomus,Septoglomus viscosum,Native AMF
+OTU98,1.34238403,-0.656145265,0.294131924,-2.230785617,0.025695333,0.089933666,Fungi,Ascomycota,Sordariomycetes,Glomerellales,Plectosphaerellaceae,Verticillium,NA,Pathogen

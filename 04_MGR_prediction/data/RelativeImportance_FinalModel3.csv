@@ -1,0 +1,14 @@
+Predictors,RelativeImportance,MGR,sig
+sOTU18 (Trichosporon),22.6,positive,***
+sOTU58 (NA),7.1,negative,*
+sOTU49 (Olpidium),6.2,positive,**
+sOTU388 (Myrothecium),5.4,positive,
+sOTU251 (Cladochytrium),4.9,positive,
+sOTU561 (NA),3.8,positive,*
+sOTU68 (Phaeosphaeria),3.2,negative,
+sOTU177 (Chaetomium),3,positive,
+sOTU392 (Powellomyces),2.6,negative,
+sOTU227 (Phaeohelotium),2.3,negative,
+sOTU142 (NA),1.8,negative,
+sOTU16 (Fusarium),1.6,positive,
+sOTU273 (NA),1.4,negative,

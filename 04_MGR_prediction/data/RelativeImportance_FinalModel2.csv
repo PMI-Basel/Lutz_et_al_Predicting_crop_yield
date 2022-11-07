@@ -1,0 +1,11 @@
+Predictors,RelativeImportance,MGR,sig
+ammonium,2.5,negative,*
+cMIC,6.2,negative,**
+magnesium(H2O),5.5,positive,**
+Nmin,4.2,positive,***
+sOTU142 (NA),3.5,negative,**
+sOTU18 (Trichosporon),22.8,positive,***
+sOTU273 (NA),6.7,negative,*
+sOTU388 (Myrothecium),6.8,positive,**
+sOTU392 (Powellomyces),5.8,negative,*
+sOTU561 (NA),3.7,positive,.

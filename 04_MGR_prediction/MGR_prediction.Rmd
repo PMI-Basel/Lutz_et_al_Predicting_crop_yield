@@ -1,0 +1,2619 @@
+
+---
+title: "MGR prediction"
+author: "Stefanie Lutz"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: yes
+    df_print: paged
+  pdf_document:
+    toc: yes
+urlcolor: blue
+---
+
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set( echo=FALSE, warning=FALSE, message=FALSE, cache=TRUE)
+
+#load libraries
+library(cowplot)
+library(DESeq2)
+library(dplyr)
+library(fantaxtic)
+library(ggfortify)
+#library(glmulti)
+library(ggplot2)
+library(ggpubr)
+library(ggvegan)
+library(indicspecies)
+library(lme4)
+library(MASS)
+library(microbiome)
+library(olsrr)
+library(phyloseq)
+library(psych)
+library(randomForest)
+library(relaimpo)
+library(reshape2)
+library(scales)
+library(stats)
+library(svglite)
+library(tidyverse)
+library(vegan)
+library(VennDiagram)
+
+#set set for reproducibility
+set.seed(12345)
+knitr::opts_chunk$set(cache = T)
+
+```
+
+
+## Project description
+
+Predicting MGR based on soil parameters and soil and root microbiome.
+
+
+#1. MGR
+
+```{r Fig.2 MGR, echo=FALSE, warning=FALSE, message=FALSE}
+
+biomass2018 <- read.csv("../MGR/data/biomass2018.csv") %>%
+               filter(fertilizer=="NK") %>%
+               mutate(year=2018) %>%
+               dplyr::select(field, fungi, block, year, dry_weight_shoot)
+
+biomass2019 <- read.csv("../MGR/data/biomass2019.csv") %>%
+               filter(fungi %in% c("CTL","RI")) %>%
+               mutate(fungi =recode(fungi, RI="AMF")) %>%
+               mutate(year=2019) %>%
+               dplyr::select(field, fungi, block, year, dry_weight_shoot)
+
+biomass2020 <- read.csv("../MGR/data/biomass2020.csv", sep=";") %>%
+               mutate(year = 2020) %>%    
+               dplyr::select(field, fungi, block, year, dry_weight_shoot)
+
+biomass_all  <- bind_rows(biomass2018, biomass2019, biomass2020) %>%
+                filter(!is.na(dry_weight_shoot)) %>%
+                mutate(fungi = fct_relevel(fungi, "CTL", "AMF"))
+
+
+
+mean_biomass_field <- biomass_all %>% 
+                      group_by(fungi, field) %>% 
+                      dplyr::summarise(mean = mean(dry_weight_shoot)) %>%
+                      spread(fungi, mean) %>% 
+                      mutate("mean_CTL" =CTL, "mean_AMF" =AMF, .keep = "unused")
+
+# from long to wide format
+biomass_field <-pivot_wider(biomass_all, 
+                            names_from = "fungi", 
+                            values_from  = "dry_weight_shoot")
+
+# combine mean with individual variable
+MGR_field <- left_join(biomass_field, mean_biomass_field, by = "field")
+
+# add a column with the difference of I (biomass of inoculated plants) - C_mean
+MGR_field <- MGR_field %>% mutate(diff = AMF-mean_CTL)
+
+# Mycorrhizal growth responses according to Koehl et al. (2012)
+MGR_field <- MGR_field %>% mutate (equation1 = 100*(1-mean_CTL/AMF))
+MGR_field <- MGR_field %>% mutate (equation2 = 100*(-1+AMF/mean_CTL))
+
+MGR_field <- MGR_field %>% mutate (MGR = if_else(diff>0, equation1, equation2))
+
+MGR_field_mean <- MGR_field %>% 
+                  group_by(field) %>%
+                  summarise(MGRmean = mean(MGR, na.rm=TRUE))
+
+
+```
+
+
+```{r Fig.2 MGR model, echo=FALSE, warning=FALSE, message=FALSE}
+
+model <- lm( MGR ~ 0+field,
+            data = MGR_field)
+
+anova(model)
+
+
+results_model <- as.data.frame(summary(model)$coefficients) 
+
+results_model <-results_model %>% 
+                rownames_to_column("new_field") %>%
+                left_join( as.data.frame(confint(model)) %>%
+                rownames_to_column("new_field"), )
+
+colnames(results_model)[3] <-"SE"
+colnames(results_model)[5] <-"P"
+colnames(results_model)[6] <-"lower_bound"
+colnames(results_model)[7] <-"upper_bound"
+
+# highlight those with P value
+results_model <- results_model %>% 
+                 mutate(significance = as.factor(if_else(P<0.05, 1, 0)))
+
+# add year information
+year_field <- dplyr::select(MGR_field, field, year) %>%
+              unique() %>%
+              mutate( year= as.factor(year)) %>%
+              mutate(new_field = str_c ("field", field))
+
+results_model <- left_join(results_model, 
+                 year_field, 
+                 by = "new_field" )
+
+```
+
+
+```{r Fig.2 MGR plot, echo=FALSE, warning=FALSE, message=FALSE}
+
+
+pd <- position_dodge(0.5)
+
+p_MGR <-ggplot(data = results_model,
+               aes(x = reorder(field, -Estimate), 
+                   y = Estimate, col=year, shape = significance)) +
+               geom_point(size=6) +
+               geom_errorbar(aes(ymin=lower_bound, 
+                                 ymax=upper_bound, col=year), 
+                                 width=0, size=3, position=pd) +
+               scale_shape_manual(values = c(1, 16))+
+               scale_color_manual(values=c("#332288","#44AA99","#999933")) +             geom_hline(yintercept=0, color="black") +
+               ylab("Mycorrhizal Growth Response [%]")+
+               xlab("Field")+
+               theme_bw()+
+               theme(axis.text.y = element_text(size = 28)) +
+               theme(axis.title = element_text(size = 28)) +
+               theme(plot.title = element_text(size = 28))  +
+               theme(legend.text = element_text(size = 28))  +
+               theme(legend.title = element_text(size = 28))  +
+               theme(axis.text.x = element_text(angle = 45, hjust = 1, size =18,
+                face=c('bold','bold','bold','bold','bold','bold','bold','bold','bold','bold','bold','bold','bold','bold','plain','plain','plain','plain','plain','plain','plain','plain','plain','plain','plain','plain','plain','plain','plain','plain','plain','plain','plain','plain','plain','plain','plain','plain','plain','plain','bold','bold','bold','bold','bold','bold','bold','bold','bold','bold','bold','bold','bold','bold'))) +
+               theme(legend.position = "bottom") +
+               annotate("text", x = 7, y = 50, label = "High MGR fields", size=9)  +
+               annotate("text", x = 48, y = 50, label = "Low MGR fields", size=9)  +
+               annotate("rect", xmin = 0, xmax = 14.5, ymin = -Inf, ymax = Inf,  alpha = .05, colour="#999999") +
+               annotate("rect", xmin = 40.5, xmax = Inf, ymin = -Inf, ymax = Inf,  alpha = .05, colour="#999999") +  
+               guides(shape = "none") +
+               guides(col=guide_legend(title="Year"))
+
+ggsave("../MGR/plots/Fig2_MGR.jpg",
+       p_MGR,
+       width = 50, 
+       height=25,
+       dpi = 800,
+       units="cm")
+
+```
+
+
+#2. Soil parameters
+
+
+##2.1 Correlations of MGR and soil parameters
+
+```{r SupTable2 Correlations soil paramters wiht MGR, echo=FALSE, warning=FALSE, message=FALSE}
+
+data<- read.csv("../MGR/data/masterTable.csv", row.names =1)
+
+#find the correlations and give the probabilities using the corr.test funtion
+spearman <- corr.test(data[1], data[4:ncol(data)], method="spearman", adjust="hochberg") 
+data_CorspearmanAdj <- cbind(t(spearman$r), t(spearman$p))
+colnames(data_CorspearmanAdj) <- c("r", "p")
+write.csv(data_CorspearmanAdj, "../MGR/results/SupTable2_Correlations_MGR_soilParameters.csv")
+
+```
+
+
+##2.2 Removal of co-correlated variables
+
+```{r correlation heatmap, echo=FALSE, warning=FALSE, message=FALSE}
+
+
+masterTable <- read.csv("../MGR/data/masterTable.csv", row.names = 1, header = T) %>% select_if(~ !any(is.na(.)))  
+
+
+soilData <- masterTable[4:ncol(masterTable)] 
+  cormat <- round(cor(soilData, method = "spearman"),2)
+
+reorder_cormat <- function(cormat){
+dd <- as.dist((1-cormat)/2)
+hc <- hclust(dd)
+cormat <-cormat[hc$order, hc$order]
+}
+
+# Get upper triangle of the correlation matrix
+  get_upper_tri <- function(cormat){
+    cormat[lower.tri(cormat)]<- NA
+    return(cormat)
+  }
+  
+reordered_cormat <- reorder_cormat(cormat)
+
+upper_tri <- get_upper_tri(reordered_cormat)
+
+# Melt the correlation matrix
+melted_cormat <- melt(upper_tri, na.rm = TRUE)
+
+write.csv(melted_cormat, "../MGR/results/Correlation_matrix.csv")
+
+
+p_heatmap<- ggplot( melted_cormat, aes(Var2, Var1, fill = value))+
+                   geom_tile(color = "white")+
+                   scale_fill_gradient2(low = "blue", high = "red", mid = "white", 
+                                         midpoint = 0, limit = c(-1,1), space = "Lab", 
+                                         name="Spearman\nCorrelation") +
+                   theme_bw()+ 
+                   theme(axis.text.x = element_text(angle = 45, vjust = 1,
+                                                    size = 14, hjust = 1),
+                         axis.text.y = element_text(size=14),
+                         legend.text = element_text(size=14),
+                         legend.title = element_text(size=14),
+                         axis.title = element_blank())+
+                   coord_fixed()
+
+
+ggsave("../MGR/plots/SupFig2_Correlationmatrix.jpg",
+       plot = p_heatmap,
+       width = 30,
+       height = 30,
+       units = "cm",
+      dpi = 800
+       )
+
+
+```
+
+
+```{r pre-selection of variables, echo=FALSE, warning=FALSE, message=FALSE}
+
+
+masterTable <- read.csv("../MGR/data/masterTable.csv", row.names = 1, header = T) %>%   select_if(~ !any(is.na(.)))  
+
+
+selection <- dplyr::select(masterTable,MGR,Ptot_agro,potassium_agro,ph_lbu,Corg_agro,
+                           humus_lbu,sodium_agro,magnesium_H2O_lbu,magnesium_EDTA_lbu,
+                           calcium_agro,phosphorus_H2O_lbu,manganese_EDTA_lbu,
+                           boron_EDTA_lbu,copper_EDTA_lbu,iron_EDTA_lbu,cMIC_agro,
+                           Nmin_agro,ammonium_agro,sand_agro,silt_agro,clay_agro,
+                           silt_lbu,clay_lbu)
+
+write.csv(selection,"../MGR/results/masterTable_pre-selection_soil.csv")
+
+```
+
+
+##2.3 Selection of soil parameters for model 
+
+###2.3.1 Random forest analysis
+
+```{r randomForest soil, echo=FALSE, warning=FALSE, message=FALSE}
+
+
+masterTable <- read.csv("../MGR/results/masterTable_pre-selection_soil.csv", row.names = 1, header = T)
+
+rf_MGR <- randomForest(MGR~., data = masterTable,
+                              ntree=1000,
+                              proximity=T)
+
+importantVariables <- importance(rf_MGR) 
+
+write.csv(importantVariables,  "../MGR/results/SupTable4_RandomForest_MGR_soil.csv")
+
+#top 10
+  
+rf_soil <- rownames(as.data.frame(importantVariables))[1:10]
+rf_soil
+```
+
+
+###2.3.2 Glmulti analysis 
+
+```{r glmulti soil, echo=FALSE, warning=FALSE, message=FALSE}
+
+test <- read.csv("../MGR/data/test.csv", row.names=1)
+data <- read.csv("../MGR/masterTable_pre-selection_soil.csv", row.names =1)
+model <- glmulti(MGR ~., data=data, method="l",crit="aicc",fitfunction = "glm", level =1, maxsize =10, plotty=FALSE)
+plot(model)
+summary(model@objects[[1]])
+plot(model, type="s")
+
+#extract predictors selected by stepAIC (rel. importance model-averaged > 0.2)
+glmulti_res <-  as.data.frame(coef(model)) %>%
+                filter(Importance > 0.2) %>%
+                filter(row_number() <= n()-1) #remove intercept
+
+glmulti_soil <- rownames(glmulti_res)              
+glmulti_soil                
+
+```
+
+
+###2.3.3 stepAIC analysis
+
+```{r stepAIC soil, echo=FALSE, warning=FALSE, message=FALSE}
+
+masterTable <- read.csv("../MGR/results/masterTable_pre-selection_soil.csv", row.names = 1, header = T)
+model = lm(MGR ~., data = masterTable)
+
+stepAIC <- stepAIC(model, direction = "both")
+
+#extract predictors selected by stepAIC
+stepAIC_soil <- rownames(as.data.frame(stepAIC$coefficients))[-1]
+
+stepAIC_soil
+
+```
+
+##2.3.4 final soil predictors
+
+```{r final soil parameters, echo=FALSE, warning=FALSE, message=FALSE}
+
+
+stepAIC_soil_predictors <- as.data.frame(stepAIC_soil) %>%
+                rename("predictor" = stepAIC_soil)
+
+glmulti_soil_predictors <- as.data.frame(glmulti_soil) %>%
+                        rename("predictor" = glmulti_soil)
+
+rf_soil_predictors <- as.data.frame(rf_soil) %>%
+           rename("predictor" = rf_soil)
+
+final_soil_predictors <- unique(rbind(stepAIC_soil_predictors,glmulti_soil_predictors,rf_soil_predictors))
+
+
+soil <- read.csv("../MGR/data/masterTable.csv", row.names =1) %>%
+        dplyr::select(MGR,Year,magnesium_EDTA_lbu,
+                      magnesium_H2O_lbu,manganese_EDTA_lbu,
+                      Nmin_agro,iron_EDTA_lbu,cMIC_agro,
+                      phosphorus_H2O_lbu,ammonium_agro,Corg_agro,
+                      sand_agro,silt_agro,Ptot_agro,boron_EDTA_lbu,
+                      clay_lbu,ph_lbu)
+
+
+
+
+
+```
+
+##2.4 Venn diagram of combined output of random forest, stepAIC and glmulti
+```{r Venn soil parameters, echo=FALSE, warning=FALSE, message=FALSE}
+
+randomForest <-   c("magnesium_EDTA_lbu","magnesium_H2O_lbu",
+                  "manganese_EDTA_lbu","Nmin_agro",
+                  "iron_EDTA_lbu","cMIC_agro","Corg_agro",
+                  "sand_agro","silt_agro","Ptot_agro")
+
+stepAIC <-   c("ph_lbu","magnesium_H2O_lbu","magnesium_EDTA_lbu",
+             "phosphorus_H2O_lbu", "manganese_EDTA_lbu",
+             "boron_EDTA_lbu","iron_EDTA_lbu","cMIC_agro",
+             "Nmin_agro","ammonium_agro")
+
+glmulti <- c("magnesium_agro","manganese_EDTA_lbu","Nmin_agro",
+             "iron_EDTA_lbu","clay_lbu","phosphorus_H2O_lbu",
+             "ammonium_agro","Corg_agro")
+
+
+venn.diagram(
+  x = list(stepAIC, glmulti, randomForest),
+  category.names = c("stepAIC ","glmulti","randomForest"),
+  filename = "plots/Fig2_VennSoilParameters.svg",
+  output=TRUE,
+  lwd = 2,
+  col = '#0072B2',
+  cex=1.5,
+  cat.cex = 1,
+  imagetype = "svg" ,
+          height = 2 , 
+          width = 2 
+)
+
+```  
+
+
+##2.5 PCA of all soil parameters
+
+```{r PCA soil parameters, echo=FALSE, warning=FALSE, message=FALSE}
+
+
+data <- read.csv("data/masterTable.csv") %>%
+        select_if(~ !any(is.na(.)))   %>%
+        rename(c("magnesium_EDTA" = magnesium_EDTA_lbu,
+               "magnesium_H2O" = magnesium_H2O_lbu,
+               "manganese" = manganese_EDTA_lbu,
+               "Nmin" = Nmin_agro,
+               "iron" = iron_EDTA_lbu,
+               "cMIC" = cMIC_agro,
+               "phosphorus_H2O" = phosphorus_H2O_lbu,
+               "ammonium" = ammonium_agro,
+               "Corg" = Corg_agro,
+               "sand" = sand_agro,
+               "silt" = silt_agro,
+               "Ptot" = Ptot_agro,
+               "boron" = boron_EDTA_lbu,
+               "clay" = clay_agro,
+               "pH" = ph_lbu))
+
+row.names(data) <- data[, 1]
+pca <- prcomp(data[5:ncol(data)], center = TRUE, scale = TRUE)
+
+s <- summary(pca)
+
+colvec <- c("#009E73","#F0E442","#D55E00")
+scl <- 3
+data$MGR_cat <- factor(data$MGR_cat, levels= c("High","Medium","Low"))
+colvec_MGR <- c("#009E73","#F0E442","#D55E00")[factor(data$MGR_cat)]
+
+pca.x <- cbind(pca$rotation[,1][c("magnesium_EDTA", "magnesium_H2O", "manganese", 
+                                  "Nmin", "iron", "cMIC", "phosphorus_H2O",
+                                  "ammonium","Corg","sand","silt","Ptot",
+                                  "boron","clay","pH" )]) * 20
+
+pca.y <- cbind(pca$rotation[,2][c("magnesium_EDTA", "magnesium_H2O", "manganese", 
+                                  "Nmin", "iron", "cMIC", "phosphorus_H2O",
+                                  "ammonium","Corg","sand","silt","Ptot",
+                                  "boron","clay","pH" )]) * 20
+
+svg("../MGR/plots/Fig2_PCA_soil_parameters.svg",
+  width = 4.5,
+  height = 4.5,
+  )
+
+
+plot(pca$x[,1], pca$x[,2], type="n",
+     xlab=paste("PCA 1 (", round(s$importance[2]*100, 1), "%)", sep = ""), 
+     ylab=paste("PCA 2 (", round(s$importance[5]*100, 1), "%)", sep = ""),
+     col=colvec, xlim=c(-12,8),ylim=c(-8,5))
+grid(nx = NULL, ny = NULL)
+with(data, levels(data$MGR_cat))
+text(pca$x[,1], pca$x[,2], labels=row.names(pca$x), font=1, col=colvec_MGR, cex=0.8)
+with(data, legend("bottom", legend=levels(MGR_cat), box.col="black", col=colvec, pch=20, title="MGR", border="black"), breaks=c("High","Medium","Low"))
+# Add arrows to biplot
+arrows(x0=0, x1=pca.x, y0=0, y1=pca.y, col="#0072B2", length=0.15, lwd=1)
+# Add labels
+text(pca.x, pca.y, labels=rownames(pca.x) , col="#0072B2", cex=0.8, adj=c(1,1.5))
+
+dev.off()
+
+    
+```
+
+
+
+
+
+#3. Soil microbiome
+
+
+##3.1 Merging and rarefying of soil OTUs using Phyloseq 
+
+```{r microbiome soil data, echo=FALSE, warning=FALSE, message=FALSE}
+
+#Prepare soil microbiome data and import into phyloseq for merging of repliacets and rarefying
+
+data <- read.csv("../MGR/data/microbiome_soil_sampleData.csv")
+
+samples <- add_column(data, Field = substr(data$Sample, 0, 3), .after = 2)
+samples <- samples[c(1,3,4)] %>%
+           remove_rownames %>%
+           column_to_rownames(var = "Sample")
+
+#sample data
+SAM = sample_data(samples)
+
+#otu data
+otus <- read.csv("../MGR/data/microbiome_soil_otus.csv", row.names = 1)
+phyloseq
+OTU = otu_table(otus, taxa_are_rows = TRUE)
+
+#taxonomy data
+taxonomy <- read.table("../MGR/data/microbiome_soil_taxonomy.tab", sep="\t", row.names = 1)
+colnames(taxonomy) <- c("Domain", "Phylum", "Class", "Order", "Family", "Genus", "Species")
+taxonomy <- as.matrix(taxonomy)
+TAX = tax_table(taxonomy)
+
+#import into phyloseq
+physeq = phyloseq(OTU, TAX, SAM)
+
+#remove OTUS with zero counts
+physeq <- prune_taxa(taxa_sums(physeq) > 0, physeq)
+
+#sum up replicates
+mergedReplicates = merge_samples(x = physeq, group = "Field", fun = "sum")
+
+sample_sums <- as.data.frame(sample_sums(mergedReplicates))
+
+#rarefy to even sampling depth
+rarefiedMergedReplicates = rarefy_even_depth(mergedReplicates, 
+                  sample.size =  min(sample_sums(mergedReplicates)),
+                  rngseed = 711)
+
+  
+#export merged and rarefied otu table
+OTU_new = as(otu_table(rarefiedMergedReplicates), "matrix")
+write.csv(OTU_new, "../MGR/results/SupTable6_OTU_table_soil_merged_rarefied.csv", row.names = T)
+write_phyloseq(rarefiedMergedReplicates, 'TAXONOMY')
+
+
+jpeg("../MGR/plots/RarefactionCurves_soil.jpg", width =1000, height = 800, res = 200)
+rarecurve(otu_table(rarefiedMergedReplicates), step=50, cex=0.5)
+dev.off()
+
+
+#import into phyloseq again since merge messes up sample and taxonomy data
+otus2 <- read.csv("../MGR/results/SupTable6_OTU_table_soil_merged_rarefied.csv", row.names = 1)
+totus <- as.data.frame(t(otus2))
+OTU2 = otu_table(totus, taxa_are_rows = TRUE)
+
+samples2 <- read.csv("../MGR/data/masterTable.csv") %>%
+            dplyr::select(Field, Year, MGR_cat)
+
+rownames(samples2) <- samples2$Field
+
+SAM2 = sample_data(samples2)
+
+
+physeq_mergedReplicates = phyloseq(OTU2, SAM2,TAX)
+
+#plot phylum level 
+p_all = plot_bar(physeq_mergedReplicates, x="Field", fill = "Phylum") 
+p_all2 <- p_all +
+          theme_bw() +
+          theme(panel.grid.major = element_blank(),
+          panel.grid.minor = element_blank()) +
+          theme(axis.text.x = element_text(size = 12,angle=45, hjust=1)) +
+          theme(axis.text.y = element_text(size = 20)) +
+          theme(axis.title = element_text(size = 20)) +
+          theme(plot.title = element_text(size = 20))  +
+          theme(legend.text = element_text(size = 20))  +
+          theme(legend.title = element_text(size = 20))  +
+          theme(strip.text.x = element_text(size = 20))
+
+ggsave("../MGR/plots/Soil_microbiome_phylum.jpg",
+  plot = p_all2,
+  width = 50,
+  height = 25,
+   units = "cm"
+  )
+
+
+```
+
+
+##3.2 Pairiwse correlations of MGR and soil OTUs
+
+```{r correlations MGR OTUs, echo=FALSE, warning=FALSE, message=FALSE}
+
+otus <- read.csv("../MGR/results/SupTable6_OTU_table_soil_merged_rarefied.csv", row.names =1) 
+
+MGR <- read.csv("../MGR/data/masterTable.csv", row.names =1) %>%
+       dplyr::select(MGR) %>%
+       drop_na()
+
+MGR_otus <- merge(MGR, otus, by = 0, all =F) %>%
+              remove_rownames() %>%
+              column_to_rownames(var = "Row.names")
+
+#find the correlations and give the probabilities using the corr.test funtion
+spearman <- corr.test(MGR_otus[1],MGR_otus[2:ncol(MGR_otus)], method="spearman", adjust="hochberg") 
+data_CorspearmanAdj <- cbind(t(spearman$r), t(spearman$p.adj))
+colnames(data_CorspearmanAdj) <- c("r", "p")
+write.csv(data_CorspearmanAdj, "../MGR/results/Correlations_MGR_soilOTUs.csv")
+
+```
+
+
+
+
+##3.3 Selection of soil OTUs for model
+
+###3.3.1 Indicator species analysis of high (top 25%) and low (bottom 25%) MGR fields
+
+```{r indicatorSpecies, echo=FALSE, warning=FALSE, message=FALSE}
+
+data <- read.csv("../MGR/data/masterTable.csv", row.names=1)
+categories <- data[c(1,3)]
+SAM = sample_data(categories)
+
+OTU  = otu_table(rarefiedMergedReplicates)
+TAX = tax_table(rarefiedMergedReplicates)
+
+
+#-----------MGR_cat
+
+physeq_indic = phyloseq(OTU, TAX, SAM)
+physeq_indic = subset_samples(physeq_indic, MGR_cat != "Medium")
+
+
+abundance = otu_table(physeq_indic)
+categories = sample_data(physeq_indic)
+MGR_cat = categories$MGR_cat
+
+inv = multipatt(abundance, MGR_cat, func = "r.g", control = how(nperm=999))
+
+sink(file="../MGR/results/IndicSpecies_MGR_cat.txt")
+summary(inv, alpha =0.1)
+sink()
+
+inv_filtered <- inv$sign %>%
+                filter(p.value <0.1) %>%
+                dplyr::select(index, p.value) %>%
+                mutate(index = recode(index, "1"="High", "2"="Low")) %>%
+                rename(MGR_cat = "index") %>%
+                tibble::rownames_to_column("OTU")
+
+taxonomy <- read.table("../MGR/data/microbiome_soil_taxonomy.tab", sep="\t")
+taxonomy <- tibble::rownames_to_column(taxonomy, "OTU")
+colnames(taxonomy) <- c("OTU", "Domain", "Phylum", "Class", "Order", "Family", "Genus", "Species")
+
+indic_taxa <- merge(inv_filtered, taxonomy, by = "OTU") 
+write.csv(indic_taxa, "../MGR/results/IndicSpecies_MGR.csv")
+
+#add abundance values
+abundance <- read.csv("../MGR/results/SupTable6_OTU_table_soil_merged_rarefied.csv")
+abundance <- t(abundance)
+colnames(abundance) <- abundance[1,]
+abundance <- abundance[-1, ] 
+abundance <- as.data.frame(abundance)
+abundance <- tibble::rownames_to_column(abundance, "OTU")
+
+MGR_taxa_abundance <- merge(indic_taxa, abundance, by = "OTU") 
+write.csv(MGR_taxa_abundance, "../MGR/results/SupTable7_IndicSpecies_MGR.csv")
+
+```
+
+
+
+###3.3.2 Differential abundance analysis of high (top 25%) and low (bottom 25%) MGR fields
+
+```{r deseq soil, echo=FALSE, warning=FALSE, message=FALSE}
+
+physeq_MGR_high_low <- subset_samples(physeq_mergedReplicates, MGR_cat != "Medium")
+
+otu_table(physeq_MGR_high_low) <- otu_table(physeq_MGR_high_low) + 1
+
+physeq_soil_deseq = phyloseq_to_deseq2(physeq_MGR_high_low , ~ MGR_cat)
+physeq_soil_deseq = DESeq(physeq_soil_deseq, test="Wald", fitType="parametric")
+
+res_all = results(physeq_soil_deseq, cooksCutoff = FALSE)
+alpha = 0.1
+sigtab = res_all[which(res_all$padj < alpha), ]
+sigtab = cbind(as(sigtab, "data.frame"), as(tax_table(physeq_MGR_high_low)[rownames(sigtab), ], "matrix"))
+head(sigtab)
+
+write.csv(sigtab, "../MGR/results/SupTable8_Deseq_soil_MGR.csv", row.names = T)
+
+
+#ggplot
+theme_set(theme_bw())
+scale_fill_discrete <- function(palname = "Set1", ...) {
+    scale_fill_brewer(palette = palname, ...)
+}
+
+# Family order
+x = tapply(sigtab$log2FoldChange, sigtab$Family, function(x) max(x))
+x = sort(x, TRUE)
+sigtab$Family = factor(as.character(sigtab$Family), levels=names(x))
+
+# Genus order
+x = tapply(sigtab$log2FoldChange, sigtab$Genus, function(x) max(x))
+x = sort(x, TRUE)
+sigtab$Genus = factor(as.character(sigtab$Genus), levels=names(x))
+
+p_deseq_soil <- ggplot(sigtab, aes(x=Genus, y=log2FoldChange, color=Genus)) +
+  #geom_point(size=6) + 
+  theme(axis.text.x = element_text(angle = -90, hjust = 0, vjust=0.5)) +
+ geom_text(label=rownames(sigtab), size = 4, position=position_jitter()) +
+geom_hline(yintercept=1, linetype="dashed", color = "black") +
+  geom_hline(yintercept=-1, linetype="dashed", color = "black") 
+
+
+ggsave("../MGR/plots/Deseq_soil_MGR.jpg",
+  plot = p_deseq_soil
+  )
+
+
+```
+
+
+
+
+###3.3.3 Random forest analysis with all fields
+
+```{r randomForest MGR all, echo=FALSE, warning=FALSE, message=FALSE}
+
+soil <- read.csv("../MGR/data/masterTable.csv", row.names = 1, header = T) %>%
+              dplyr::select(MGR) %>%
+              drop_na()
+
+otus <- read.csv("../MGR/results/SupTable6_OTU_table_soil_merged_rarefied.csv", row.names =1)
+
+soil_otus <- merge(soil,otus, by = 0, all = F) %>%
+            remove_rownames %>%
+            column_to_rownames(var = "Row.names")
+
+rf_MGR <- randomForest(MGR ~., data = soil_otus,
+                   ntree=1000,
+                   proximity=T)
+
+importance(rf_MGR, type=1)
+
+importantVariables <- importance(rf_MGR)
+
+write.csv(importantVariables,  "../MGR/results/SupTable9_RandomForest_MGR_soilOTUs.csv")
+
+
+
+```
+
+
+
+##3.4 Venn diagram of combined output of indicatorSpecies, DESeq2 and random forest
+
+```{r Fig.3 Venn soil parameters, echo=FALSE, warning=FALSE, message=FALSE}
+
+randomForest <- c("OTU151","OTU18","OTU26","OTU15","OTU1325","OTU724",
+                  "OTU181","OTU52","OTU529","OTU38","OTU9","OTU194",
+                  "OTU147","OTU182","OTU24","OTU39","OTU322",
+                  "OTU728","OTU31","OTU422")
+
+
+DESeq2 <- c("OTU18","OTU100","OTU156","OTU251","OTU253","OTU134","OTU179",
+            "OTU182","OTU243","OTU252","OTU268","OTU273","OTU281","OTU284",
+            "OTU375","OTU631","OTU74","OTU75","OTU80")
+
+
+indicatorSpecies <- c("OTU16","OTU18","OTU38","OTU49","OTU93","OTU100","OTU177",
+                      "OTU243","OTU274","OTU388","OTU561",
+                      "OTU15","OTU58","OTU68","OTU69","OTU72","OTU106","OTU142",
+                      "OTU179","OTU182","OTU217","OTU227","OTU273",
+                      "OTU366","OTU392","OTU451","OTU544","OTU589","OTU608",
+                      "OTU631","OTU884")
+                      
+
+
+venn.diagram(
+  x = list(DESeq2, indicatorSpecies, randomForest),
+  category.names = c("DESeq2 ","indicator species","random forest"),
+  filename = "plots/Fig3_VennSoilFungi.svg",
+  output=TRUE,
+  lwd = 2,
+  col = '#56B4E9',
+  cex=1,
+  cat.cex = 1,
+  imagetype = "svg" ,
+         height = 2 , 
+         width = 2 
+)
+
+```  
+
+
+
+##3.5 Additional selection step of OTUS after indicator species analysis, DESeq2 and random forest
+
+
+```{r soil OTUs, echo=FALSE, warning=FALSE, message=FALSE}
+
+indicator_species <- indic_taxa %>%
+                     dplyr::select(OTU,MGR_cat)
+
+deseq_taxa  <- sigtab %>%
+               rownames_to_column("OTU") %>%
+               mutate(MGR_cat = case_when(log2FoldChange > 0 ~ "Low",
+                                                 log2FoldChange < 0 ~ "High")) %>%
+               dplyr::select(OTU,MGR_cat)
+
+soilOTUs <- unique(rbind(indicator_species, deseq_taxa))
+
+soilOTUs_high <- soilOTUs %>%
+                 filter(MGR_cat == "High")
+
+soilOTUs_low <- soilOTUs %>%
+                 filter(MGR_cat == "Low")
+
+```  
+
+
+
+### 3.5.1 Glmulti with all high MGR OTUs
+
+```{r glmulti soil OTUs high, echo=FALSE, warning=FALSE, message=FALSE}
+
+
+MGR <- read.csv("../MGR/data/masterTable.csv", row.names =1) %>%
+             dplyr::select(MGR) %>%
+             drop_na()
+
+otus <- read.csv("../MGR/results/OTU_table_soil_merged_rarefied.csv", row.names =1) %>%
+             dplyr::select(OTU16,OTU18,OTU38,OTU49,OTU93,
+                    OTU100,OTU156,OTU177,OTU243,OTU251,
+                    OTU253,OTU274,OTU388,OTU561)
+
+predictors  <- merge(MGR, otus, by = 0, all = F) %>%
+                remove_rownames %>%
+                column_to_rownames(var = "Row.names")
+ 
+write.csv(predictors, "../MGR/results/masterTable_pre-selection_soil_otus_high.csv")
+
+
+data <- read.csv("../MGR/results/masterTable_pre-selection_soil_otus_high.csv", row.names =1)
+model <- glmulti(MGR ~., data=data, method="h",crit="aicc",fitfunction = "glm", level =1, maxsize = 10)
+
+plot(model)
+summary(model@objects[[1]])
+
+#select OTUs with >0.2
+plot(model, type="s")
+
+glmulti_res_high <-  as.data.frame(coef(model)) %>%
+                     filter(Importance > 0.2) %>%
+                     filter(row_number() <= n()-1) #remove intercept
+
+glmulti_soilOTUs_high <- rownames(glmulti_res_high)              
+glmulti_soilOTUs_high
+
+```
+
+
+### 3.5.2 Glmulti with all low MGR OTUs
+
+```{r glmulti soil OTUs low, echo=FALSE, warning=FALSE, message=FALSE}
+
+
+MGR <- read.csv("../MGR/data/masterTable.csv", row.names =1) %>%
+             dplyr::select(MGR) %>%
+             drop_na()
+
+otus <- read.csv("../MGR/results/OTU_table_soil_merged_rarefied.csv", row.names =1) %>%
+             dplyr::select(OTU15,OTU58,OTU68,OTU69,OTU72,
+                    OTU106,OTU134,OTU142,OTU179,
+                    OTU182,OTU217,OTU227,OTU243,
+                    OTU252,OTU268,OTU273,OTU281,
+                    OTU284,OTU366,OTU375,OTU392,
+                    OTU451,OTU544,OTU589,OTU608,
+                    OTU631,OTU74,OTU75,OTU80,OTU884)
+
+predictors  <- merge(MGR, otus, by = 0, all = F) %>%
+                remove_rownames %>%
+                column_to_rownames(var = "Row.names")
+ 
+write.csv(predictors, "../MGR/results/masterTable_pre-selection_soil_otus_low.csv")
+
+
+data <- read.csv("../MGR/results/masterTable_pre-selection_soil_otus_low.csv", row.names =1)
+model <- glmulti(MGR ~., data=data, method="h",crit="aicc",fitfunction = "glm", level =1, maxsize = 10)
+
+plot(model)
+summary(model@objects[[1]])
+
+#select OTUs with >0.2
+plot(model, type="s")
+
+glmulti_res_low <-   as.data.frame(coef(model)) %>%
+                     filter(Importance > 0.2) %>%
+                     filter(row_number() <= n()-1) #remove intercept
+
+glmulti_soilOTUs_low <- rownames(glmulti_res_low)              
+glmulti_soilOTUs_low
+
+```
+
+
+###3.5.3 Final list of soil OTU predictors
+
+```{r final soil OTU predictors, echo=FALSE, warning=FALSE, message=FALSE}
+
+soilOTUpredictors <- read.csv("../MGR/results/SupTable6_OTU_table_soil_merged_rarefied.csv", row.names =1) %>%
+             dplyr::select(OTU16,OTU18,OTU49,OTU177,OTU251,
+                           OTU388,OTU561,OTU58,OTU68,OTU142,
+                           OTU227,OTU273,OTU392)
+
+write.csv(soilOTUpredictors, "../MGR/results/soilOTUpredictors.csv")
+```
+
+
+
+##3.6 Principal coordinate analyses
+
+###3.6.1 Year effect in soil microbiome
+
+```{r PCoA year, echo=FALSE, warning=FALSE, message=FALSE}
+
+
+otu_table  <- read.csv("../MGR/results/SupTable6_OTU_table_soil_merged_rarefied.csv", header=T, sep=",", check.names = F)
+
+colnames(otu_table) <- paste("s", colnames(otu_table), sep = "")
+
+colnames(otu_table)[1] <- "Field"
+
+masterTable <- read.csv("../MGR/data/masterTable.csv") %>%
+               select_if(~ !any(is.na(.)))  
+
+year <- masterTable[c(1,2)]
+
+data <- merge(year, otu_table, by = "Field")
+data <- column_to_rownames(data, "Field")
+data$Year <- as.factor(data$Year)
+
+otus <- data[2:ncol(data)] 
+      
+# Square root  transformation of species abundance in order to correct for statistical errors associated to rare or very common species
+sqrt_otus = sqrt(otus)
+
+# Choose method according to above
+otus_dist = vegdist(sqrt_otus, "bray")
+
+colvec <- c("#332288","#44AA99","#999933")
+scl = 3
+
+# Perform PCoA
+pcoa <- cmdscale(otus_dist, eig = T)
+with(data, levels(data$Year))
+
+eig <-eigenvals(pcoa)
+eig/(sum(eig))
+
+
+jpeg("../MGR/plots/SupFig3_PCoA_microbiome_soil_Year.jpg",
+  width = 20,
+  height = 20,
+  units = "cm",
+  res = 800
+  )
+
+p_ordiplot <- ordiplot(pcoa,
+                       type="none", 
+                       xlab = "PCoA1 (8.9%)",
+                       ylab = "PCoA2 (7.2%)",
+                       xlim = c(-0.3,0.3),
+                       ylim = c(-0.3,0.4))
+               with(data, text(p_ordiplot, 
+                           "sites", 
+                           col=colvec[Year],
+                           scaling=scl, 
+                           pch=18, 
+                           bg=colvec[Year])
+                           )
+              with(data, legend("topright", 
+                                legend=levels(Year), 
+                                col=colvec, 
+                                pch=21, 
+                                pt.bg=colvec, 
+                                title="Year",
+                                box.col="black",
+                                border="black"))
+              grid(nx = NULL, ny = NULL)
+              ordiellipse(pcoa,data$Year,conf=0.95,col=colvec)
+
+dev.off()
+
+
+
+```
+
+
+
+###3.5.2 Partial constrained analysis of principal coordinates (removing year effect)
+
+```{r Fig.3 PCoA, echo=FALSE, warning=FALSE, message=FALSE}
+
+
+otu_table  <- read.csv("../MGR/results/SupTable6_OTU_table_soil_merged_rarefied.csv", header=T, sep=",", check.names = F)
+
+colnames(otu_table) <- paste("s", colnames(otu_table), sep = "")
+
+colnames(otu_table)[1] <- "Field"
+
+
+masterTable <- read.csv("../MGR/data/masterTable.csv") %>%
+               select_if(~ !any(is.na(.)))  
+
+year <- masterTable[c(1,2,4)]
+
+data <- merge(year, otu_table, by = "Field")
+data <- column_to_rownames(data, "Field")
+data$Year <- as.factor(data$Year)
+data$MGR_cat <- factor(data$MGR_cat, levels= c("High","Medium","Low"))
+
+otus <- data[3:ncol(data)]
+otus_sqrt <- sqrt(otus)
+scl <- 3
+colvec <- c("#009E73","#F0E442","#D55E00")
+
+
+#Perform capscale
+capscale <- capscale(otus_sqrt ~ MGR_cat + Condition(Year), data, dist="bray")
+
+summary_capscale <- summary(capscale)
+
+capscale.x <- cbind(summary_capscale$species[,1][c("sOTU16","sOTU18","sOTU49","sOTU177","sOTU251","sOTU388","sOTU561",
+                                    "sOTU58","sOTU68","sOTU142","sOTU227","sOTU273","sOTU392")]) * 20
+
+capscale.y <- cbind(summary_capscale$species[,2][c("sOTU16","sOTU18","sOTU49","sOTU177","sOTU251","sOTU388","sOTU561",
+                                    "sOTU58","sOTU68","sOTU142","sOTU227","sOTU273","sOTU392")]) * 20
+
+
+svg("../MGR/plots/Fig3_pRDA_soil_microbiome.svg",
+  width = 4.5,
+  height = 4.5)
+
+plot(capscale, type= "n", 
+     xlab= "CAP1 (16.9%)",
+     ylab= "CAP2 (15.9%)",
+     xlim= c(-0.1,2.0),
+     ylim=c(-2.0,2.0))
+#with(data, levels(data$MGR_cat))
+grid(nx = NULL, ny = NULL)
+with(data, text(capscale, display="sites", cex=0.8, col=colvec[MGR_cat],
+                bg=colvec[MGR_cat]), labels=data$Field)
+#add arrow
+arrows(x0=0, x1=capscale.x, y0=0, y1=capscale.y, col="#56B4E9", length=0.15, lwd=1)
+#add labels
+text(capscale.x, capscale.y, labels=rownames(capscale.x), cex=0.8, col="#56B4E9", adj=c(1,1.5))
+
+#with(data, legend("topright", legend=levels(MGR_cat), box.col="black", col=colvec, pch=20, title="MGR", border="black"),breaks=c("High","Medium","Low"))
+
+dev.off()
+
+
+```
+
+
+
+
+
+##3.7 Scatter plots of summed high and low MGR OTUs and MGR
+
+```{r scatter plots 2, echo=FALSE, warning=FALSE, message=FALSE}
+
+MGR <- read.csv("../MGR/data/masterTable.csv", row.names=1) %>%
+      dplyr::select(MGR) %>%
+      drop_na()
+
+otus <- read.csv("../MGR/results/SupTable6_OTU_table_soil_merged_rarefied.csv")
+
+indicators <- otus %>%
+              rowwise() %>%
+              mutate(all_MGR_high = sum(OTU16,OTU18,OTU49,OTU177,
+                                        OTU251,OTU388,OTU561, 
+                                        na.rm = T)) %>%
+              mutate(all_MGR_low = sum(OTU58,OTU68,OTU142,OTU227,
+                                       OTU273,OTU392, 
+                                       na.rm = T)) %>%
+              remove_rownames %>%
+              column_to_rownames(var = "X") 
+
+soil_indicators <- merge(MGR,indicators, by = 0, all = F) %>%
+                         remove_rownames %>%
+                         column_to_rownames(var = "Row.names") %>%
+                         dplyr::select(MGR,all_MGR_high, all_MGR_low) %>%
+                         rowwise() %>%
+                         mutate(all_MGR_high_rel = all_MGR_high / (4295/100)) %>%
+                         mutate(all_MGR_low_rel = all_MGR_low / (4295/100))
+
+
+write.csv(soil_indicators, "../MGR/results/SummedHighMGR_soilIndicators.csv")
+
+
+p_summedOTUs_high <- ggscatter(soil_indicators, y = "MGR", x = "all_MGR_high_rel",
+                          add = "reg.line",conf.int = TRUE, cor.coef = FALSE,
+                          cor.method = "spearman", add.params = list(color = "grey"),
+                          xlab="Summed rel. abundance of high MGR OTUs [%]",
+                          ylab="Mycorrhizal Growth Response [%]") +
+                          ylim(-20,42) +
+                          annotate("text", x = 5, y = 37,
+                                   label = "rho = 0.43, p = 0.001", size=4) +
+                          theme(text = element_text(size = 11)) 
+
+ggsave("../MGR/plots/Fig4_Scatter_summedOTUs_high.svg",
+  plot = p_summedOTUs_high,
+  width = 10,
+  height = 10,
+  units = "cm"
+  )
+
+
+p_summedOTUs_low <- ggscatter(soil_indicators, y = "MGR", x = "all_MGR_low_rel",
+                          add = "reg.line",conf.int = TRUE, cor.coef = FALSE,
+                          cor.method = "spearman", add.params = list(color = "grey"),
+                          xlab="Summed rel. abundance of low MGR OTUs [%]",
+                          ylab="Mycorrhizal Growth Response [%]") +
+                          scale_x_continuous(labels = label_number(accuracy = 1),
+                                             breaks=c(1,2),
+                                             minor_breaks = NULL) +
+                          ylim(-20,42) +
+                          theme(text = element_text(size = 11)) +
+                          annotate("text", x = 0.7, y = 37,
+                                   label = "rho = -0.51, p < 0.001", size=4)  
+
+ggsave("../MGR/plots/Fig4_Scatter_summedOTUs_low.svg",
+  plot = p_summedOTUs_low,
+  width = 10,
+  height = 10,
+  units = "cm"
+  )
+
+
+```
+
+
+
+##3.8 Abundance of high MGR OTUs
+
+```{r Fig.4 z-transformation high MGR OTUs, echo=FALSE, warning=FALSE, message=FALSE}
+
+otus <- read.csv("../MGR/results/SupTable6_OTU_table_soil_merged_rarefied.csv", row.names =1) %>%
+        dplyr::select(OTU18,OTU16,OTU49,OTU177,OTU251,OTU388,OTU561)
+  
+
+z_otus <- as.data.frame(scale(otus, center = TRUE, scale = TRUE)) %>%
+          dplyr::select(OTU18,OTU16,OTU49,OTU177,OTU251,OTU388,OTU561) 
+
+z_otus <- tibble::rownames_to_column(z_otus, "Field")%>%
+          rename(c('sOTU18 (Trichosporon)'=OTU18,
+                   'sOTU16 (Fusarium)'=OTU16,
+                   'sOTU49 (Olpidium)'=OTU49,
+                   'sOTU177 (Chaetomium)'=OTU177,
+                   'sOTU251 (Cladochytrium)'=OTU251,
+                   'sOTU388 (Myrothecium'=OTU388,
+                   'sOTU561 (NA)'=OTU561)
+                   )
+
+otus.long <-  z_otus %>%
+              melt(id = "Field") 
+
+MGR_model <- results_model %>%
+             dplyr::select(field, Estimate, lower_bound, upper_bound) %>%
+             rename(c('Field'=field,'MGR'=Estimate))
+
+MGR_cat <- read.csv("data/masterTable.csv") %>%
+           dplyr::select(Field, MGR_cat) %>%
+           drop_na()
+
+MGR <- merge(MGR_model,MGR_cat,by="Field") 
+
+otus.MGR <- merge(otus.long,MGR,by="Field") %>%
+            rename('OTUs'=variable)
+
+
+colorBlindGrey8   <- c("#E69F00", "#56B4E9", "#009E73", 
+                       "#F0E442", "#0072B2", "#D55E00", "#CC79A7")
+
+
+
+
+
+p_highMGROTUs <- ggplot(otus.MGR, aes(x=reorder(Field,-MGR), y=value, group=OTUs, color=OTUs)) +
+                                  geom_errorbar(aes(ymin=lower_bound/7, ymax=upper_bound/7),
+                                                    width=0,size=2,color="grey") +
+                                  geom_point(size=5) +
+                                  theme_bw() +
+                                  theme(axis.text.x = element_text(size = 8, angle = 45, hjust=1,                                           face=c('bold','bold','bold','bold','bold','bold','bold','bold','bold','bold','bold','bold','bold','bold','plain','plain','plain','plain','plain','plain','plain','plain','plain','plain','plain','plain','plain','plain','plain','plain','plain','plain','plain','plain','plain','plain','plain','plain','plain','plain','plain','plain','plain','plain','plain','plain','plain','plain','plain','plain','plain','plain','plain','plain'))) +
+                                  theme(axis.text.y = element_text(size = 11)) +
+                                  theme(axis.title = element_text(size = 11)) +
+                                  theme(plot.title = element_text(size = 11))  +
+                                  theme(legend.text = element_text(size = 11))  +
+                                  theme(legend.title = element_blank()) +
+                                  theme(legend.position = "bottom") +
+                                  scale_color_discrete(name="OTUs") +
+                                  labs(x = "Field") + 
+                                  scale_y_continuous(name = "Rel. abundance of high MGR OTUs [z-score]", 
+                                                     sec.axis = sec_axis( trans=~.*7,
+                                                                          name="Mycorrhizal Growth Response [%]")) + scale_color_manual(values=colorBlindGrey8)
+
+
+
+ggsave("../MGR/plots/Fig4_Distribution_highMGROTUs.svg",
+  plot = p_highMGROTUs,
+  width = 20,
+  height = 12,
+  units = "cm"
+  )
+
+
+
+
+
+```
+
+```{r Fig.4, echo=FALSE, warning=FALSE, message=FALSE}
+
+
+p_Figure4 <- ggdraw() +
+             draw_plot(p_summedOTUs_high,x=0, y=0.5, width=0.5 ,height=0.5) +
+             draw_plot(p_summedOTUs_low,x=0.5, y=0.5, width=0.5 ,height=0.5) +
+             draw_plot(p_highMGROTUs,x=0, y=0, width=1.0 , height=0.5) +
+             draw_plot_label(label = c("A)", "B)", "C)"), size = 20,
+                              x = c(0, 0.5, 0), y = c(1, 1,0.5)) 
+
+
+ggsave("../MGR/plots/Fig4.jpg",
+  plot = p_Figure4,
+  width = 35,
+  height = 35,
+  units = "cm",
+  dpi = 800
+  )
+
+
+```
+
+
+##3.8 Abundance of low  MGR OTUs (z-transformation)
+
+```{r z-transformation low MGR OTUs, echo=FALSE, warning=FALSE, message=FALSE}
+
+otus <- read.csv("results/SupTable6_OTU_table_soil_merged_rarefied.csv", row.names =1) 
+
+z_otus <- as.data.frame(scale(otus, center = TRUE, scale = TRUE)) %>%
+          dplyr::select(OTU58,OTU68,OTU142,OTU227,OTU273,OTU392)
+
+
+z_otus <- tibble::rownames_to_column(z_otus, "Field") %>%
+          rename(c('sOTU58 (NA)'=OTU58,
+                   'sOTU68 (Phaeosphaeria)'=OTU68,
+                   'sOTU142 (NA)'=OTU142,
+                   'sOTU227 (Phaeohelotium)'=OTU227,
+                   'sOTU273 (NA)'=OTU273,
+                   'sOTU392 (Powellomyces)'=OTU392)
+                    )
+
+otus.long <-  z_otus %>%
+           melt(id = "Field") 
+
+
+MGR_model <- results_model %>%
+       dplyr::select(field, Estimate, lower_bound, upper_bound) %>%
+       rename(c('Field'=field,'MGR'=Estimate))
+
+MGR_cat <- read.csv("data/masterTable.csv") %>%
+           dplyr::select(Field, MGR_cat)
+
+MGR_cat$MGR_cat <- as.factor(MGR_cat$MGR_cat)
+
+MGR <- merge(MGR_model,MGR_cat,by="Field") 
+
+otus.MGR <- merge(otus.long,MGR,by="Field") %>%
+            rename('OTUs'=variable)
+
+colorBlindGrey8   <- c("#E69F00", "#56B4E9", "#009E73", 
+                       "#F0E442", "#0072B2", "#D55E00", "#CC79A7")
+
+
+p_lowMGROTUs <- ggplot(otus.MGR, aes(x=reorder(Field,-MGR), y=value, group=OTUs, color=OTUs)) +
+  geom_errorbar(aes(ymin=lower_bound/7, ymax=upper_bound/7), width=0,size=3,color="grey") +
+  geom_point(size=8) +
+    theme_bw() +
+                 theme(axis.text.x = element_text(size = 15, angle = 45, hjust=1,                                            face=c('plain','plain','plain','plain','plain','plain','plain','plain','plain','plain','plain','plain','plain','plain','plain','plain','plain','plain','plain','plain','plain','plain','plain','plain','plain','plain','plain','plain','plain','plain','plain','plain','plain','plain','plain','plain','plain','plain','plain','plain','bold','bold','bold','bold','bold','bold','bold','bold','bold','bold','bold','bold','bold','bold'))) +
+                 theme(axis.text.y = element_text(size = 20)) +
+                 theme(axis.title = element_text(size = 20)) +
+                 theme(plot.title = element_text(size = 20))  +
+                 theme(legend.text = element_text(size = 20))  +
+                 theme(legend.title = element_blank()) +
+                 theme(legend.position = "bottom") + 
+                 scale_color_discrete(name="OTUs") +
+                 labs(x = "Field") + 
+    scale_y_continuous(name = "Rel. abundance of low MGR OTUs [z-score]", 
+                       sec.axis = sec_axis( trans=~.*7, name="Mycorrhizal Growth Response [%]")) + scale_fill_manual(values=colorBlindGrey8)
+
+
+
+ggsave("../MGR/plots/SupFig4_Distriubtion_lowMGROTUs.jpg",
+  plot = p_lowMGROTUs,
+  width = 50,
+  height = 25,
+  units = "cm",
+  dpi = 600
+  )
+
+
+```
+
+
+
+
+
+
+#4. Total root colonization
+
+```{r TotalColonization, echo=FALSE, warning=FALSE, message=FALSE}
+
+colonization_data <- read.csv("../MGR/data/totalColonization.csv")
+
+#calculate the mean for each field and treatment
+totalColonization <- colonization_data %>% 
+group_by(Year, Field, Treatment) %>%
+summarise(TotalColonizationMean = mean(TotalColonization, na.rm=TRUE),
+          TotalColonizationSD=sd(TotalColonization, na.rm=TRUE),
+          TotalColonizationMin=min(TotalColonization, na.rm=TRUE),
+          TotalColonizationMax=max(TotalColonization, na.rm=TRUE))
+
+write.csv(totalColonization, "../MGR/results/totalColonization.csv", row.names = F)
+
+
+#calculate the delta mean for each field
+delta_totalColonization <- totalColonization %>%
+                           group_by(Year, Field) %>%
+                           summarise(delta_TotalColonization = diff(TotalColonizationMean, na.rm=TRUE))
+
+#write output
+write.csv(delta_totalColonization, "../MGR/results/delta_totalColonization.csv", row.names = F)
+            
+
+```
+
+
+
+#5. Root microbiome
+
+#5.1 Processing of root OTUs using phyloseq - abundance at phylum level
+
+```{r root phyloseq, echo=FALSE, warning=FALSE, message=FALSE}
+
+#Prepare root microbiome data and import into phyloseq for merging of repliacets and rarefying
+
+#sample data
+samples  <- read.csv("../MGR/data/microbiome_roots.csv", header=T, sep=",", check.names = F, row.names = 1)
+SAM = sample_data(samples)
+
+#otu data
+otus <- read.csv("../MGR/data/microbiome_roots_otus.csv",row.names = 1)
+OTU = otu_table(otus, taxa_are_rows = TRUE)
+
+#taxonomy data
+taxonomy <- read.table("../MGR/data/microbiome_root_taxonomy_mod.txt", sep="\t", row.names = 1)
+colnames(taxonomy) <- c("Domain", "Phylum", "Class", "Order", "Family", "Genus", "Species")
+taxonomy <- as.matrix(taxonomy)
+TAX = tax_table(taxonomy)
+
+#import into phyloseq
+physeq = phyloseq(OTU, TAX, SAM)
+
+
+#remove OTUS with zero counts
+physeq_pruned <- prune_taxa(taxa_sums(physeq) > 0, physeq)
+
+#remove samples with reads <100
+physeq_pruned_100 = prune_samples(sample_sums(physeq_pruned)>=100, physeq_pruned)
+
+#rarefy to even sampling depth
+rarefied_OTU = rarefy_even_depth(physeq_pruned_100, 
+                  sample.size = min(sample_sums(physeq_pruned_100)),
+                  rngseed = 711)
+
+#export merged and rarefied otu table
+OTU = as(otu_table(rarefied_OTU), "matrix")
+write.csv(OTU, "../MGR/results/OTU_table_root_rarefied.csv", row.names = T)
+
+
+#plot phylum level with separated CTL and AMF 
+p_all = plot_bar(rarefied_OTU, x="Field", fill = "Phylum", facet_grid=~Treatment)
+p_all2 <- p_all +
+          theme_bw() +
+          theme(panel.grid.major = element_blank(),
+          panel.grid.minor = element_blank()) +
+          theme(axis.text.x = element_text(size = 8,angle=45, hjust=1)) +
+          theme(axis.text.y = element_text(size = 20)) +
+          theme(axis.title = element_text(size = 20)) +
+          theme(plot.title = element_text(size = 20))  +
+          theme(legend.text = element_text(size = 20))  +
+          theme(legend.title = element_text(size = 20))  +
+          theme(strip.text.x = element_text(size = 20))
+
+ggsave("../MGR/plots/SupFig6_RelativeAbundance_roots_phylum.jpg",
+  plot = p_all2,
+  width = 50,
+  height = 25,
+   units = "cm"
+  )
+
+
+jpeg("../MGR/plots/SupFig7_RarefactionCurves_root.jpg", width =1000, height = 800, res = 200)
+rarecurve(t(otu_table(rarefied_OTU)), step=50, cex=0.5)
+dev.off()
+
+```
+
+
+#5.2 Processing of root OTUs using phyloseq - abundance at genus level
+
+```{r root phyloseq, echo=FALSE, warning=FALSE, message=FALSE}
+
+#Prepare root microbiome data and import into phyloseq for merging of repliacets and rarefying
+
+data  <- read.csv("../MGR/data/microbiome_roots.csv", header=T, sep=",", check.names = F, row.names = 1) 
+
+data[data == "Control"] <- "C"
+data[data == "Inoculated"] <- "I"
+
+#sample data
+SAM = sample_data(data)
+
+#otu data
+otus <- read.csv("../MGR/data/microbiome_roots_otus.csv",row.names = 1)
+OTU = otu_table(otus, taxa_are_rows = TRUE)
+
+#taxonomy data
+taxonomy <- read.table("../MGR/data/microbiome_root_taxonomy_mod.txt", sep="\t", row.names = 1)
+colnames(taxonomy) <- c("Domain", "Phylum", "Class", "Order", "Family", "Genus", "Species")
+taxonomy <- as.matrix(taxonomy)
+TAX = tax_table(taxonomy)
+
+#import into phyloseq
+physeq = phyloseq(OTU, TAX, SAM)
+
+
+#remove OTUS with zero counts
+physeq_pruned <- prune_taxa(taxa_sums(physeq) > 0, physeq)
+
+#remove samples with reads <100
+physeq_pruned_100 = prune_samples(sample_sums(physeq_pruned)>=100, physeq_pruned)
+
+#rarefy to even sampling depth
+rarefied_OTU = rarefy_even_depth(physeq_pruned_100, 
+                  sample.size = min(sample_sums(physeq_pruned_100)),
+                  rngseed = 711)
+
+#export merged and rarefied otu table
+OTU = as(otu_table(rarefied_OTU), "matrix")
+write.csv(OTU, "../MGR/results/OTU_table_root_rarefied.csv", row.names = T)
+
+
+#agglomoerate at genus level
+phyloseq_Genus <- tax_glom(rarefied_OTU, "Genus")
+
+OTU_Genus = as(otu_table(phyloseq_Genus), "matrix")
+write.csv(OTU_Genus, "../MGR/results/OTU_table_root_Genus_level.csv", row.names = T)
+
+
+#otu table with top 10 Class
+phyloseq_Genus_top15 = get_top_taxa(phyloseq_Genus, 15, relative = TRUE, other_label = "zOther")
+
+OTU_Genus_top15 = as(otu_table(phyloseq_Genus_top15), "matrix")
+write.csv(OTU_Genus_top15, "../MGR/results/OTU_table_root_Genus_level_top15.csv", row.names = T)
+
+
+# relative abundance 
+phyloseq_Genus_top15_rel = transform_sample_counts(phyloseq_Genus_top15, function(x) x/sum(x))
+
+OTU_Genus_rel = as(otu_table(phyloseq_Genus_top15_rel), "matrix")
+write.csv(OTU_Genus_rel, "../MGR/results/OTU_table_root_Genus_top15_rel.csv", row.names = T)
+
+phyloseq_Genus_top15_rel_2018 <- subset_samples(phyloseq_Genus_top15_rel, Year=="2018")
+
+phyloseq_Genus_top15_rel_2019 <- subset_samples(phyloseq_Genus_top15_rel, Year=="2019")
+
+phyloseq_Genus_top15_rel_2020 <- subset_samples(phyloseq_Genus_top15_rel, Year=="2020")
+
+palette <- c("#88CCEE", "#DDCC77", "#117733", "#332288", "#AA4499", "#44AA99", "#D55E00","#999933",  "#661100",  "#888888", "black")
+
+labels <- c('Candida', 'Cortinarius','Dominikia','Funneliformis','Glomus', 'Phaeohelotium', 'Rhizoglomus (SAF22)', 'Rhizophagus', 'Septoglomus', 'Genus not assigned','Other')
+
+
+
+#plot phylum level with separated by field 
+p_all_2018 = plot_bar(phyloseq_Genus_top15_rel_2018, x="Treatment", fill = "Genus", facet_grid=~Field) 
+
+p_all_2019 = plot_bar(phyloseq_Genus_top15_rel_2019, x="Treatment", fill = "Genus", facet_grid=~Field) 
+
+p_all_2020 = plot_bar(phyloseq_Genus_top15_rel_2020, x="Treatment", fill = "Genus", facet_grid=~Field) 
+                   
+                   
+                   
+
+#p_all2 <- p_all_2018 + 
+#p_all2 <- p_all_2019 +
+p_all2 <- p_all_2020 +
+          theme_bw() +
+          theme(panel.grid.major = element_blank(),
+          panel.grid.minor = element_blank()) +
+          theme(axis.text.x = element_text(size = 12)) +
+          theme(axis.text.y = element_text(size = 12)) +
+          theme(axis.title = element_text(size = 12)) +
+          theme(plot.title = element_text(size = 12))  +
+          theme(legend.text = element_text(size = 12))  +
+          theme(legend.title = element_text(size = 12))  +
+          theme(strip.text.x = element_text(size = 12)) +
+  scale_fill_manual(values=palette, labels = labels) +
+  annotate("text", label="xx.x", x=1.5, y=1.05)
+
+
+svglite("../MGR/plots/SupFig10_Root_genus_2020.svg",
+        width = 8,
+        height = 5)
+plot(p_all2)
+dev.off()
+
+
+
+```
+
+
+
+##5.3 Principal coordinate analyses of year effect and partial constrained analysis of principal coordinates (removing year effect)
+
+
+```{r root PCoA, echo=FALSE, warning=FALSE, message=FALSE}
+
+
+data  <- read.csv("../MGR/data/microbiome_roots.csv", header=T, sep=",", check.names = F) %>%
+          filter(Treatment == "Control") %>%
+          drop_na() %>%
+          column_to_rownames(var="Field")
+
+data$Year <- as.factor(data$Year)
+data$MGR_cat <- as.factor(data$MGR_cat)
+
+otus <- data[8:ncol(data)]
+
+colnames(otus) <- paste("r", colnames(otus), sep = "")
+
+# Square root  transformation of species abundance in order to correct for statistical errors associated to rare or very common species
+sqrt_otus = sqrt(otus)
+
+# Choose method according to above
+otus_dist = vegdist(sqrt_otus, "bray") 
+
+
+scl <- 1
+colvec_year <- c("#332288","#44AA99","#999933")
+colvec_MGR <- c("#009E73","#F0E442","#D55E00")
+
+
+# Perform PCoA
+pcoa <- cmdscale(otus_dist, eig = T)
+with(data, levels(data$Year))
+
+eig <-eigenvals(pcoa)
+eig/(sum(eig))
+
+
+#Perform Capscale
+capscale <- capscale(otus_dist ~ MGR_cat + Condition(Year), data, dist="bray")
+with(data, levels(data$MGR_cat))
+
+
+
+jpeg("../MGR/plots/SupFig8_Ordination_root_year_MGR.jpg",
+  width = 30,
+  height = 15,
+  units = "cm",
+  res = 600
+  )
+
+par(mfrow= c(1,2) )
+
+p_ordiplot<- ordiplot(pcoa,
+         type="none", 
+         xlab = "PCoA1 (24.0%)",
+         ylab = "PCoA2 (15.0%)",
+         xlim=c(-0.8,0.8),
+         ylim=c(-0.6,0.4))
+with(data, text(p_ordiplot,
+                "sites",
+                col=colvec_year[Year],
+                scaling=scl,
+                pch=21,
+                bg=colvec_year[Year]),
+                labels=data$Field)
+with(data, legend("topright", 
+           legend=levels(Year),
+           col=colvec_year,
+           pch=21,
+           pt.bg=colvec_year,
+           title="Year",
+           box.col="black",
+           border="black"))
+grid(nx = NULL, ny = NULL)
+ordiellipse(pcoa,data$Year,conf=0.95,col=colvec_year)
+
+
+
+
+plot(capscale,
+     type = "n",
+     #scaling =scl,
+     xlab= "CAP1 (16.9%)",
+     ylab= "CAP2 (15.9%)",
+     xlim=c(-0.8,0.8),
+     ylim=c(-0.6,0.6))
+grid(nx = NULL, ny = NULL)
+with(data, text(capscale, 
+                #display="sites",
+                col=colvec_MGR[MGR_cat],
+                scaling=scl,
+                pch=21,
+                bg=colvec_MGR[MGR_cat]))
+with(data, legend("topright",
+                  legend=levels(MGR_cat),
+                  col=colvec_MGR,
+                  pch=21,
+                  pt.bg=colvec_MGR,
+                  title="MGR",
+                  box.col="black",
+                  border="black"),
+                  breaks=c("High","Medium","Low"))
+ordiellipse(capscale,data$MGR_cat,conf=0.95,col=colvec_MGR, scaling=scl)
+
+
+dev.off()
+
+
+
+
+```
+
+
+##5.3 Principal coordinate analyses of treatment
+
+```{r SupFig9 root PCoA treatment, echo=FALSE, warning=FALSE, message=FALSE}
+
+
+data  <- read.csv("../MGR/data/microbiome_roots.csv", header=T, sep=",", check.names = F) %>%
+          drop_na() %>%
+          column_to_rownames(var="SampleID")
+
+data$Treatment <- as.factor(data$Treatment)
+
+otus <- data[8:ncol(data)]
+
+colnames(otus) <- paste("r", colnames(otus), sep = "")
+
+# Square root  transformation of species abundance in order to correct for statistical errors associated to rare or very common species
+sqrt_otus = sqrt(otus)
+
+# Choose method according to above
+otus_dist = vegdist(sqrt_otus, "bray") 
+
+
+scl <- 3
+colvec <- c("#56B4E9","#D55E00")
+
+
+# Perform PCoA
+pcoa <- cmdscale(otus_dist, eig = T)
+with(data, levels(data$Treatment))
+
+eig <-eigenvals(pcoa)
+eig/(sum(eig))
+
+
+jpeg("../MGR/plots/SupFig9_PCoA_microbiome_root_treatment.jpg",
+  width = 20,
+  height = 20,
+  units = "cm",
+  res = 600
+  )
+
+p_ordiplot<- ordiplot(pcoa,
+                      type="none", 
+                      xlab = "PCoA1 (24.0%)",
+                      ylab = "PCoA2 (15.0%)",
+                      xlim=c(-0.8,0.8),
+                      ylim=c(-0.8,0.8)
+                      )
+with(data, text(p_ordiplot,
+                "sites",
+                col=colvec[Treatment],
+                scaling=scl,
+                pch=21,
+                bg=colvec[Treatment],
+               labels=data$Field))
+with(data, legend("topright", 
+           legend=levels(Treatment),
+           col=colvec,
+           pch=21,
+           pt.bg=colvec,
+           title="Treatment",
+           box.col="black",
+           border="black"))
+grid(nx = NULL, ny = NULL)
+ordiellipse(pcoa,data$Treatment,conf=0.95,col=colvec, scaling=scl)
+
+
+dev.off()
+
+
+
+
+```
+
+
+##5.5 Total root colonization, SAF22 relative abundance and MGR
+
+```{r Fig.3 establishment, echo=FALSE, warning=FALSE, message=FALSE}
+
+
+SAF22_RA <- read.csv("../MGR/data/SAF22abundance.csv") %>%
+            dplyr::select(Field, delta_rel) 
+
+
+totalColonization <- read.csv("../MGR/results/delta_totalColonization.csv") %>%
+                     dplyr::select(Field, delta_TotalColonization)
+ 
+SAF22_RA_totalColonization <- merge(SAF22_RA, totalColonization, by="Field") %>%
+                              rename(c('SAF22 rOTUs'=delta_rel,
+                              'Total colonization (microscopy)'=delta_TotalColonization))
+
+SAF22_RA_totalColonization.long <-  SAF22_RA_totalColonization %>%
+                                    melt(id = "Field") 
+
+MGR_model <- results_model %>%
+             dplyr::select(field, Estimate, lower_bound, upper_bound) %>%
+             rename(c('Field'=field,'MGR'=Estimate))
+
+SAF22_RA_totalColonization_MGR <- merge(SAF22_RA_totalColonization.long,
+                                        MGR_model,by="Field") %>%
+                                  rename('Establishment'=variable)
+
+#width and height in inches
+svg("../MGR/plots/Fig3_establishment.svg",
+     width = 12, height=6)
+
+
+ggplot(SAF22_RA_totalColonization_MGR, 
+       aes(x=reorder(Field,-MGR), y=value, 
+           group=Establishment, color=Establishment, shape=Establishment)) +
+       geom_errorbar(aes(ymin=lower_bound*2, ymax=upper_bound*2),
+                         width=0,size=3,color="grey") +
+       geom_point(size=6) +
+       geom_smooth(se=F) +
+       theme_bw() +
+       theme(axis.text.x = element_text(size = 12, angle = 45, hjust=1))    +                         
+       theme(axis.text.y = element_text(size = 16)) +
+       theme(axis.title = element_text(size = 16)) +
+       theme(plot.title = element_text(size = 16))  +
+       theme(legend.text = element_text(size = 16))  +
+       theme(legend.title = element_blank()) +
+       theme(legend.position = "bottom") +
+       labs(x = "Field") +
+       scale_y_continuous(name = "AMF establishment [%]", 
+       sec.axis = sec_axis( trans=~./2,
+                            name="Mycorrhizal Growth Response [%]")) +
+       scale_color_manual(values = c("#b8e186","#117733")) 
+
+dev.off()
+```
+
+
+```{r SupFig5 AMF establishment ggscatter, echo=FALSE, warning=FALSE, message=FALSE}
+
+MGR <- MGR_model %>%
+       dplyr::select(Field, MGR)
+
+SAF22_totalColonization_MGR <-   merge(SAF22_RA_totalColonization, MGR, by = "Field")
+
+
+SAF22 <- ggscatter(SAF22_totalColonization_MGR, 
+                   x = "SAF22 rOTUs", y = "MGR", 
+                   add = "reg.line",
+                   conf.int = TRUE, cor.coef = FALSE, 
+                   cor.method = "spearman", add.params = list(color = "blue"),
+                   xlab="Δ SAF22 rOTUs [%]",
+                   ylab="MGR [%]") +
+         annotate("text", x = 30, y = 35, label = "rho = 0.075, p = 0.59", size=4)
+
+
+totCol <- ggscatter(SAF22_totalColonization_MGR,
+                    x = "Total colonization (microscopy)", y = "MGR", 
+                    add = "reg.line",
+                    conf.int = TRUE, cor.coef = FALSE, 
+                    cor.method = "spearman",
+                    add.params = list(color = "blue"),
+                    xlab="Δ Total root colonisation [%]",
+                    ylab="MGR [%]") +
+         annotate("text", x = 15, y = 35, label = "rho = 0.014, p = 0.92", size=4)
+
+
+SAF22_totCol <- ggscatter(SAF22_totalColonization_MGR, 
+                          x = "SAF22 rOTUs", y = "Total colonization (microscopy)", 
+                          add = "reg.line", conf.int = TRUE, cor.coef = FALSE, 
+                          cor.method = "spearman", 
+                          add.params = list(color = "blue"),
+                          xlab="Δ SAF22 rOTUs [%]",
+                          ylab="Δ Total root colonisation [%]") +
+                annotate("text", x = 33, y = 60, label = "rho = 0.540, p < 0.0001", size=4)
+ 
+               
+
+#p_establishment_scatter <-ggarrange(SAF22, totCol, SAF22_totCol, ncol = 3, nrow = 1)
+
+p_establishment_scatter <- ggdraw() +
+             draw_plot(SAF22,x=0, y=0, width=0.33 ,height=1.0) +
+             draw_plot(totCol,x=0.33, y=0, width=0.33 ,height=1.0) +
+             draw_plot(SAF22_totCol,x=0.66, y=0, width=0.34, height=1.0) +
+             draw_plot_label(label = c("A", "B", "C"), size = 18,
+                              x = c(0, 0.33, 0.66), y = c(1, 1,1)) 
+
+
+
+ggsave("../MGR/plots/SupFig5_MGR_AMF_establishment.jpg",
+      plot = p_establishment_scatter,
+      width = 25,
+      height = 8,
+      units = "cm",
+      dpi = 800
+      ) 
+
+
+```
+
+
+
+
+#6. Models
+
+#6.1 Final list of predictors for model input
+
+```{r final predictors, echo=FALSE, warning=FALSE, message=FALSE}
+
+soil <- read.csv("../MGR/data/masterTable.csv", row.names =1) %>%
+        dplyr::select(MGR,Year,magnesium_EDTA_lbu,
+                      magnesium_H2O_lbu,manganese_EDTA_lbu,
+                      Nmin_agro,iron_EDTA_lbu,cMIC_agro,
+                      phosphorus_H2O_lbu,ammonium_agro,Corg_agro,
+                      sand_agro,silt_agro,Ptot_agro,boron_EDTA_lbu,
+                      clay_lbu,ph_lbu)
+
+otus <- read.csv("../MGR/results/SupTable6_OTU_table_soil_merged_rarefied.csv", row.names =1) %>%
+             dplyr::select(OTU16,OTU18,OTU49,OTU177,OTU251,OTU388,OTU561,
+                    OTU58,OTU68,OTU142,OTU227,OTU273,OTU392)
+
+ predictors  <- merge(soil, otus, by = 0, all = F) %>%
+                remove_rownames %>%
+                column_to_rownames(var = "Row.names")
+ 
+write.csv(predictors, "../MGR/results/final_predictors_for_model_input.csv")
+
+
+```
+
+
+##6.2 Full model 
+
+```{r model1, echo=FALSE, warning=FALSE, message=FALSE}
+
+data <- read.csv("../MGR/results/final_predictors_for_model_input.csv", row.names =1)
+
+model1 = lm(MGR ~.,
+            data = data)
+
+summary(model1)
+
+ols_test_normality(model1)
+
+plot(model1)
+
+coef(model1)
+
+calc.relimp(model1, type="lmg", rela = FALSE)
+
+
+```
+
+
+##6.3 Reduced model 
+
+```{r model 2 glmulti, echo=FALSE, warning=FALSE, message=FALSE}
+
+# Reduced model selection using glmulti
+
+data <- read.csv("../MGR/results/final_predictors_for_model_input.csv",row.names=1)
+
+model <- glmulti(MGR ~., data=data, 
+                 method="h",crit="aicc",
+                 fitfunction = "glm", 
+                 level =1, 
+                 maxsize =12, 
+                 plotty=FALSE)
+
+print(model)
+
+#Examine best model
+summary(model@objects[[1]])
+
+plot(model, type="s")
+coef(model)
+
+```
+
+
+```{r model2, echo=FALSE, warning=FALSE, message=FALSE}
+
+data <- read.csv("../MGR/results/final_predictors_for_model_input.csv", row.names =1)
+
+#feature selection based on results from above glmulti
+model2 = lm(MGR ~  magnesium_H2O_lbu + 
+                   Nmin_agro + 
+                   cMIC_agro + 
+                   ammonium_agro + 
+                   OTU18 + 
+                   OTU388 + 
+                   OTU561 + 
+                   OTU142 + 
+                   OTU273 + 
+                   OTU392,
+                   data = data)
+
+summary(model2)
+
+ols_test_normality(model2)
+
+plot(model2)
+
+calc.relimp(model2, type="lmg", rela = FALSE)
+
+
+```
+
+
+
+##6.3 Soil fungi model
+
+```{r model3, echo=FALSE, warning=FALSE, message=FALSE}
+
+data <- read.csv("../MGR/results/final_predictors_for_model_input.csv", row.names =1)
+
+model3 = lm(MGR ~ OTU18 +
+                  OTU561 +
+                  OTU49 +
+                  OTU273 +
+                  OTU177 +
+                  OTU58 +
+                  OTU388 +
+                  OTU392 +
+                  OTU251 +
+                  OTU16 +
+                  OTU142 +
+                  OTU68 +
+                  OTU227,
+                  data = data)
+
+summary(model3)
+
+ols_test_normality(model3)
+
+plot(model3)
+
+calc.relimp(model3, type="lmg", rela = FALSE)
+
+```
+
+
+##6.4 Relative imortance of model variables
+
+```{r relaimpo bar chart, echo=FALSE, warning=FALSE, message=FALSE}
+
+#relative importance (calc.relaimpo(model1)) and significance (summary(model1)) added in excel
+
+relaimpo1 <- read.csv("../MGR/data/RelativeImportance_FinalModel1.csv") %>%
+  mutate(Predictors =recode(Predictors, "Total colonisation (microscopy)"="Δ Total root colonisation (micropscopy)")) %>%
+  mutate(Predictors =recode(Predictors, "Relative abundace SAF22 (root OTUs)"="Δ Relative abundance SAF22 (root OTUs)")) 
+
+#relative importance (calc.relaimpo(model2)) and significance (summary(model2)) added in excel
+relaimpo2 <- read.csv("../MGR/data/RelativeImportance_FinalModel2.csv")
+
+#relative importance (calc.relaimpo(model3)) and significance (summary(model3)) added in excel
+relaimpo3 <- read.csv("../MGR/data/RelativeImportance_FinalModel3.csv")
+
+fontface <- c("bold" ,"plain","plain","bold",
+              "plain","plain","plain","plain","plain","plain",
+              "bold",
+              "plain","plain","plain","plain","plain","plain", "plain",
+              "bold",
+              "plain" , "plain" , "plain" , "plain",  "plain" , "plain","plain" , "plain" , "plain" , "plain"  ,"plain" , "plain" , "plain",  "plain" , "plain",
+              "bold" , "bold")
+
+ p_relaimpo1 <- ggplot(relaimpo1,
+                      aes(x = RelativeImportance,
+                          y = reorder(Predictors, Order),
+                          fill = MGR)) +
+                      xlab("Relative importance [%]") +
+                      ylab("Predictors") +
+                      labs(fill='')+ 
+                      geom_col() +
+                      theme_bw() +
+                      geom_text(aes(label = sig), hjust = -0.3, vjust=0.6) +
+                      geom_text(aes(label=percentage), hjust=0, vjust=0.6)+ 
+                      xlim(0,58) +
+                      theme(axis.title.x = element_blank()) +
+                      theme(legend.position = "none") +
+                      theme(axis.title.y = element_blank()) +
+                      ggtitle(expression(atop("Full model", paste(R^{2},"=0.857, p<0.001"))))  + 
+                      theme(plot.title = element_text(size=10)) +
+                      scale_fill_manual(values=c("negative"="#D55E00","positive"="#56B4E9","z"="grey"))+
+                      theme(axis.text.y=element_text(face=fontface))+
+                      annotate("rect", xmin = 0, xmax = 0.3, ymin = 0.5, ymax =0.7, colour="grey")
+ 
+ 
+  p_relaimpo2 <- ggplot(relaimpo2,
+                      aes(x = RelativeImportance,
+                          y = reorder(Predictors, RelativeImportance),
+                          fill = MGR)) +
+                      xlab("Relative importance [%]") +
+                      ylab("Predictors") +
+                      labs(fill='')+ 
+                      geom_col() +
+                      theme_bw() +
+                      geom_text(aes(label = sig), hjust = -0.3, vjust=0.6) +
+                      xlim(0,27) +
+                      theme(legend.position="bottom") +
+                      theme(axis.title.y = element_blank()) +
+                      ggtitle(expression(atop("Reduced model", paste(R^{2},"=0.683, p<0.001"))))  + 
+                      theme(plot.title = element_text(size=10)) +
+                      theme(axis.title.x = element_blank()) +
+                      theme(legend.position = "none")  +
+                      scale_fill_manual(values=c("negative"="#D55E00","positive"="#56B4E9"))
+ 
+  
+  p_relaimpo3 <- ggplot(relaimpo3,
+                      aes(x = RelativeImportance,
+                          y = reorder(Predictors, RelativeImportance),
+                          fill = MGR)) +
+                      xlab("Relative importance") +
+                      ylab("Predictors") +
+                      labs(fill='')+ 
+                      geom_col() +
+                      theme_bw() +
+                      geom_text(aes(label = sig), hjust = -0.3, vjust=0.6) +
+                      xlim(0,27) +
+                      theme(legend.position="bottom") +
+                      theme(legend.justification="right") +
+                      theme(axis.title.y = element_blank()) +
+                      ggtitle(expression(atop("Soil fungi model", paste(R^{2},"=0.659, p<0.001"))))  + 
+                      theme(plot.title = element_text(size=10)) +
+                      theme(axis.title.x = element_blank()) +
+                      scale_fill_manual(values=c("negative"="#D55E00","positive"="#56B4E9"))
+
+  
+ p_relaimpo_all <- ggdraw() +
+                  draw_plot(p_relaimpo1, x = 0, y = 0, width = .6, height = 1) +
+                  draw_plot(p_relaimpo2, x = .6, y = 0.6, width = .4, height = 0.4) +
+                  draw_plot(p_relaimpo3, x = .6, y = 0, width = .4, height = 0.6) +
+                  draw_plot_label(label = c("A)", "B)", "C)"), 
+                                  size = 12,
+                                  x = c(0, 0.6, 0.6), 
+                                  y = c(1, 1, 0.6))
+
+
+
+ggsave("../MGR/plots/Fig5.jpg",
+plot = p_relaimpo_all,
+#  width = 12,
+##  height = 20,
+#  units = "cm",
+  dpi = 600
+  )
+
+
+```
+
+
+
+##6.5 Pathogen model
+
+```{r SupFig12 pathogens, echo=FALSE, warning=FALSE, message=FALSE}
+
+
+MGR <- read.csv("../MGR/data/masterTable.csv", header = T) %>%
+              dplyr::select(Field, MGR) %>%
+              drop_na()
+
+otus <- read.csv("../MGR/results/SupTable6_OTU_table_soil_merged_rarefied.csv")
+
+
+#plant pathogen information from funguild analysis
+
+pathogens <-  otus %>%
+              rename("Field"=X) %>%
+              rowwise() %>%
+              mutate(plantPathogens = sum(OTU1005,OTU1009,OTU1054,OTU1155,OTU1221,OTU1305,OTU1330,OTU1349,
+OTU1443,OTU1490,OTU150,OTU1549,OTU1595,OTU16,OTU1628,OTU1708,
+OTU172,OTU1747,OTU1771,OTU182,OTU1851,OTU1903,OTU20,OTU2031,OTU2061,
+OTU2086,OTU2092,OTU2110,OTU215,OTU232,OTU239,OTU2490,OTU251,
+OTU2568,OTU263,OTU2647,OTU267,OTU2776,OTU281,OTU288,OTU2906,
+OTU297,OTU308,OTU3093,OTU3142,OTU32,
+OTU330,OTU350,OTU392,OTU417,OTU438,OTU48,OTU49,OTU509,
+OTU513,OTU52,OTU527,OTU546,OTU57,OTU603,OTU654,OTU665,
+OTU71,OTU749,OTU809,OTU82,OTU887,OTU92,OTU927,OTU968,na.rm = T)) %>%
+              mutate(plantPathogensAll =
+sum(OTU1005,OTU1009,OTU1015,OTU1054,OTU1127,OTU1143,
+OTU1221,OTU1305,OTU133,OTU1330,OTU1348,OTU1349,OTU1363,
+OTU1443,OTU1490,OTU150,OTU1549,OTU1553,OTU1595,OTU16,OTU1608,
+OTU1628,OTU1663,OTU1675,OTU1690,OTU1695,OTU1708,OTU1711,OTU172,
+OTU1747,OTU1750,OTU1771,OTU182,OTU1851,OTU1896,OTU1900,OTU1903,
+OTU1918,OTU20,OTU2031,OTU2041,OTU2042,OTU205,OTU2057,OTU2061,
+OTU2086,OTU2092,OTU2101,OTU2110,OTU215,OTU2209,OTU2256,
+OTU232,OTU2326,OTU239,OTU2420,OTU2490,OTU251,OTU2568,
+OTU263,OTU2640,OTU2647,OTU267,OTU2776,OTU2784,OTU281,
+OTU2836,OTU288,OTU2895,OTU2906,OTU297,
+OTU308,OTU3093,OTU3116,OTU3142,OTU32,OTU330,
+OTU350,OTU377,OTU385,OTU392,OTU417,OTU438,OTU474,OTU48,
+OTU49,OTU509,OTU513,OTU517,OTU52,OTU524,OTU527,OTU546,
+OTU57,OTU573,OTU603,OTU620,OTU651,OTU654,OTU665,OTU671,
+OTU71,OTU735,OTU749,OTU806,OTU809,OTU82,OTU827,OTU85,
+OTU853,OTU886,OTU887,OTU92,OTU927,OTU968,OTU978,OTU99,OTU997, na.rm = T)) %>%
+           mutate(plantPathogens_rel  = plantPathogens  / (4295/100)) %>%
+           mutate(plantPathogensAll_rel  = plantPathogensAll  / (4295/100))
+
+soil_pathogens <- merge(MGR,pathogens, by = "Field") %>%
+            remove_rownames %>%
+            column_to_rownames(var = "Field") %>%
+            dplyr::select(MGR,plantPathogens_rel, plantPathogensAll_rel)
+
+
+p1 <- ggscatter(soil_pathogens, x = "plantPathogens_rel", y = "MGR", add = "reg.line",
+         conf.int = TRUE, cor.coef = F, cor.method = "spearman",
+         add.params = list(color = "blue"),
+         xlab="Plant pathogens [%]", ylab="Mycorrhizal growth response [%]") +
+         annotate("text", x = 5, y = 37, label = "rho = 0.062, p = 0.65", size=4) 
+  
+p2 <- ggscatter(soil_pathogens, x = "plantPathogensAll_rel", y = "MGR", add = "reg.line",
+         conf.int = TRUE, cor.coef = F, cor.method = "spearman",
+         add.params = list(color = "blue"),
+         xlab="Plant pathogens extended [%]", ylab="Mycorrhizal growth response [%]") +
+         annotate("text", x = 5, y = 37, label = "rho = 0.035, p = 0.80", size=4) 
+
+
+p_scatter_pathogens <-ggarrange(p1, p2, ncol = 2, nrow = 1)
+
+
+ggsave("../MGR/plots/SupFig12_pathogens.jpg",
+  plot = p_scatter_pathogens,
+  width = 30,
+  height = 12,
+  units = "cm",
+  dpi = 600
+  )
+
+p_scatter_pathogens
+```
+
+```{r model pathogens, echo=FALSE, warning=FALSE, message=FALSE}
+
+model_pathogen <- lm(MGR ~ plantPathogens_rel,
+             data = soil_pathogens,
+                     )
+
+
+summary(model_pathogen)
+
+ols_test_normality(model_pathogen)
+
+
+```
+
+
+
+
+##6.6 Scatter plots of OTU18 and soil parameters
+
+```{r OTU18 correlations, echo=FALSE, warning=FALSE, message=FALSE}
+
+otu18 <- read.csv("../MGR/results/SupTable6_OTU_table_soil_merged_rarefied.csv") %>%
+  rename("Field" = X) %>%
+  dplyr::select(Field, OTU18)
+
+soil <- read.csv("../MGR/data/masterTable.csv")
+
+otu18_soil <- merge(otu18, soil, by = "Field", all =F) %>%
+              remove_rownames() %>%
+              column_to_rownames("Field") 
+
+spearman <- corr.test(otu18_soil[1], otu18_soil[6:ncol(otu18_soil)], method="spearman", adjust="hochberg") 
+data_CorspearmanAdj <- cbind(t(spearman$r), t(spearman$p))
+
+colnames(data_CorspearmanAdj) <- c("r", "p")
+write.csv(data_CorspearmanAdj, "../MGR/results/Correlations_OTU18_soilParameters.csv")
+
+```
+
+
+```{r SupFig11 scatter plots OTU18, echo=FALSE, warning=FALSE, message=FALSE}
+
+p1 <- ggscatter(otu18_soil, x = "sand_agro", y = "OTU18", add = "reg.line",
+         conf.int = TRUE, cor.coef = TRUE, cor.method = "spearman",
+         add.params = list(color = "blue"))
+
+p2 <- ggscatter(otu18_soil, x = "slan_lbu", y = "OTU18", add = "reg.line",
+         conf.int = TRUE, cor.coef = TRUE, cor.method = "spearman",
+         add.params = list(color = "blue"))
+
+p3 <- ggscatter(otu18_soil, x = "CEC_agro", y = "OTU18", add = "reg.line",
+         conf.int = TRUE, cor.coef = TRUE, cor.method = "spearman",
+         add.params = list(color = "blue"))
+
+p4 <- ggscatter(otu18_soil, x = "WHC_agro", y = "OTU18", add = "reg.line",
+         conf.int = TRUE, cor.coef = TRUE, cor.method = "spearman",
+         add.params = list(color = "blue"))
+
+p5 <- ggscatter(otu18_soil, x = "Ntot_agro", y = "OTU18", add = "reg.line",
+         conf.int = TRUE, cor.coef = TRUE, cor.method = "spearman",
+         add.params = list(color = "blue"))
+
+p6 <- ggscatter(otu18_soil, x = "clay_agro", y = "OTU18", add = "reg.line",
+         conf.int = TRUE, cor.coef = TRUE, cor.method = "spearman",
+         add.params = list(color = "blue"))
+
+p7 <- ggscatter(otu18_soil, x = "fertility_lbu", y = "OTU18", add = "reg.line",
+         conf.int = TRUE, cor.coef = TRUE, cor.method = "spearman",
+         add.params = list(color = "blue"))
+
+p8 <- ggscatter(otu18_soil, x = "silt_agro", y = "OTU18", add = "reg.line",
+         conf.int = TRUE, cor.coef = TRUE, cor.method = "spearman",
+         add.params = list(color = "blue"))
+
+p9 <- ggscatter(otu18_soil, x = "humus_agro", y = "OTU18", add = "reg.line",
+         conf.int = TRUE, cor.coef = TRUE, cor.method = "spearman",
+         add.params = list(color = "blue"))
+
+p10 <- ggscatter(otu18_soil, x = "Corg_agro", y = "OTU18", add = "reg.line",
+         conf.int = TRUE, cor.coef = TRUE, cor.method = "spearman",
+         add.params = list(color = "blue"))
+
+
+p11 <- ggscatter(otu18_soil, x = "phosphorus_EDTA_lbu", y = "OTU18", add = "reg.line",
+         conf.int = TRUE, cor.coef = TRUE, cor.method = "spearman",
+         add.params = list(color = "blue"))
+
+p12 <- ggscatter(otu18_soil, x = "clay_lbu", y = "OTU18", add = "reg.line",
+         conf.int = TRUE, cor.coef = TRUE, cor.method = "spearman",
+         add.params = list(color = "blue"))
+
+p13 <- ggscatter(otu18_soil, x = "potassium_CO2_lbu", y = "OTU18", add = "reg.line",
+         conf.int = TRUE, cor.coef = TRUE, cor.method = "spearman",
+         add.params = list(color = "blue"))
+
+p14 <- ggscatter(otu18_soil, x = "vast_lbu", y = "OTU18", add = "reg.line",
+         conf.int = TRUE, cor.coef = TRUE, cor.method = "spearman",
+         add.params = list(color = "blue"))
+
+p15 <- ggscatter(otu18_soil, x = "phosphorus_H2O_lbu", y = "OTU18", add = "reg.line",
+         conf.int = TRUE, cor.coef = TRUE, cor.method = "spearman",
+         add.params = list(color = "blue"))
+
+p16 <- ggscatter(otu18_soil, x = "phosphorus_CO2_lbu", y = "OTU18", add = "reg.line",
+         conf.int = TRUE, cor.coef = TRUE, cor.method = "spearman",
+         add.params = list(color = "blue"))
+
+p17 <- ggscatter(otu18_soil, x = "hydrogen_agro", y = "OTU18", add = "reg.line",
+         conf.int = TRUE, cor.coef = TRUE, cor.method = "spearman",
+         add.params = list(color = "blue"))
+
+
+p18 <- ggscatter(otu18_soil, x = "potassium_H2O_lbu", y = "OTU18", add = "reg.line",
+         conf.int = TRUE, cor.coef = TRUE, cor.method = "spearman",
+         add.params = list(color = "blue"))
+
+p19 <- ggscatter(otu18_soil, x = "boron_H2O_lbu", y = "OTU18", add = "reg.line",
+         conf.int = TRUE, cor.coef = TRUE, cor.method = "spearman",
+         add.params = list(color = "blue"))
+
+p20 <- ggscatter(otu18_soil, x = "ph_lbu", y = "OTU18", add = "reg.line",
+         conf.int = TRUE, cor.coef = TRUE, cor.method = "spearman",
+         add.params = list(color = "blue"))
+
+
+p_scatter_otu18 <- ggarrange(p1, p2, p3, p4, p5, p6, p7, p8, p9, p10,
+                             p11, p12, p13, p14, p15, p16, p17, p18,
+                             p19, p20, ncol = 5, nrow = 4)
+
+
+
+ggsave("../MGR/plots/SupFig11_Scatter_plots_OTU18.jpg",
+       plot = p_scatter_otu18,
+       width = 50,
+     height = 30,
+       units = "cm",
+       dpi = 600
+       )
+
+```
+
+
+##6.7 Scatter plots of OTU58 and soil parameters
+
+
+```{r OTU58, echo=FALSE, warning=FALSE, message=FALSE}
+
+otu58 <- read.csv("../MGR/results/SupTable6_OTU_table_soil_merged_rarefied.csv") %>%
+  rename("Field" = X) %>%
+  dplyr::select(Field, OTU58)
+
+soil <- read.csv("../MGR/data/masterTable.csv")
+
+otu58_soil <- merge(otu58, soil, by = "Field", all =F) %>%
+              remove_rownames() %>%
+              column_to_rownames("Field") 
+
+spearman <- corr.test(otu58_soil[1], otu58_soil[6:ncol(otu58_soil)], method="spearman", adjust="hochberg") 
+data_CorspearmanAdj <- cbind(t(spearman$r), t(spearman$p))
+colnames(data_CorspearmanAdj) <- c("r", "p")
+write.csv(data_CorspearmanAdj, "../MGR/results/Correlations_OTU58_soilParameters.csv")
+
+```
+
+```{r scatter plots OTU58, echo=FALSE, warning=FALSE, message=FALSE}
+
+
+p1 <- ggscatter(otu58_soil, x = "respiration_lbu", y = "OTU58", add = "reg.line",
+         conf.int = TRUE, cor.coef = TRUE, cor.method = "spearman",
+         add.params = list(color = "blue"))
+
+p2 <- ggscatter(otu58_soil, x = "fertility_lbu", y = "OTU58", add = "reg.line",
+         conf.int = TRUE, cor.coef = TRUE, cor.method = "spearman",
+         add.params = list(color = "blue"))
+
+
+p3 <- ggscatter(otu58_soil, x = "potassium_agro", y = "OTU58", add = "reg.line",
+         conf.int = TRUE, cor.coef = TRUE, cor.method = "spearman",
+         add.params = list(color = "blue"))
+
+p4 <- ggscatter(otu58_soil, x = "clay_agro", y = "OTU58", add = "reg.line",
+         conf.int = TRUE, cor.coef = TRUE, cor.method = "spearman",
+         add.params = list(color = "blue"))
+
+p5 <- ggscatter(otu58_soil, x = "silt_lbu", y = "OTU58", add = "reg.line",
+         conf.int = TRUE, cor.coef = TRUE, cor.method = "spearman",
+         add.params = list(color = "blue"))
+
+p6 <- ggscatter(otu58_soil, x = "Ntot_agro", y = "OTU58", add = "reg.line",
+         conf.int = TRUE, cor.coef = TRUE, cor.method = "spearman",
+         add.params = list(color = "blue"))
+
+p7 <- ggscatter(otu58_soil, x = "slan_lbu", y = "OTU58", add = "reg.line",
+         conf.int = TRUE, cor.coef = TRUE, cor.method = "spearman",
+         add.params = list(color = "blue"))
+
+p8 <- ggscatter(otu58_soil, x = "Corg_agro", y = "OTU58", add = "reg.line",
+         conf.int = TRUE, cor.coef = TRUE, cor.method = "spearman",
+         add.params = list(color = "blue"))
+
+p9 <- ggscatter(otu58_soil, x = "humus_agro", y = "OTU58", add = "reg.line",
+         conf.int = TRUE, cor.coef = TRUE, cor.method = "spearman",
+         add.params = list(color = "blue"))
+
+
+p_scatter_otu58 <- ggarrange(p1, p2, p3, p4, p5, p6, p7, p8, p9, ncol = 5, nrow = 2)
+
+ggsave("../MGR/plots/SupFig13_Scatter_plots_OTU58.jpg",
+       plot = p_scatter_otu58,
+       width = 50,
+     height = 20,
+       units = "cm",
+       dpi = 600
+       )
+
+```
+
+
+
+#7. Differential abundance roots 
+
+```{r Fig.6 deseq high MGR, echo=FALSE, warning=FALSE, message=FALSE}
+
+physeq_high <- subset_samples(physeq, MGR_cat == "High")
+physeq_high_pruned <- prune_taxa(taxa_sums(physeq_high) > 0, physeq)
+rarefied_high_rarefied = rarefy_even_depth(physeq_high_pruned, 
+                  sample.size = min(sample_sums(physeq_high_pruned)),
+                  rngseed = 711)
+otu_table(rarefied_high_rarefied) <- otu_table(rarefied_high_rarefied) + 1
+
+physeq_high_deseq = phyloseq_to_deseq2(rarefied_high_rarefied, ~ Treatment)
+physeq_high_deseq = DESeq(physeq_high_deseq, test="Wald", fitType="parametric")
+
+
+res_high = results(physeq_high_deseq, cooksCutoff = FALSE)
+alpha = 0.1
+sigtab = res_high[which(res_high$padj < alpha), ]
+sigtab = cbind(as(sigtab, "data.frame"), as(tax_table(rarefied_high_rarefied)[rownames(sigtab), ], "matrix"))
+head(sigtab)
+
+write.csv(sigtab, "../MGR/results/Deseq_root_high_MGR.csv", row.names = T)
+
+```
+
+
+```{r Fig.6 deseq high MGR ggplot, echo=FALSE, warning=FALSE, message=FALSE}
+
+#guild (Native AMF, Inoculated AMF, Pathogen, Other) information added to deseq results in excel
+
+sigtab <- read.csv("../MGR/data/Deseq_root_high_MGR_guild.csv", row.names=1)
+
+# Genus order
+x = tapply(sigtab$log2FoldChange, sigtab$Genus, function(x) max(x))
+x = sort(x, TRUE)
+sigtab$Genus = factor(as.character(sigtab$Genus), levels=names(x))
+
+# Guild order
+x = tapply(sigtab$log2FoldChange, sigtab$Guild, function(x) max(x))
+x = sort(x, TRUE)
+sigtab$Guild = factor(as.character(sigtab$Guild), levels=names(x))
+
+p_deseq_high <- ggplot(sigtab, aes(x=Genus, y=log2FoldChange, colour=Guild, shape=Guild)) +
+                theme_bw() +
+                theme(axis.text.x = element_text(angle = -90, hjust = 0, vjust=0.5),
+                      axis.title.y=element_blank()) +
+                ylim(-3, 7.5)+
+                geom_point(size=5)+
+                geom_hline(yintercept=1, linetype="dashed", color = "black") +
+                geom_hline(yintercept=-1, linetype="dashed", color = "black") +
+                geom_hline(yintercept=0, color = "black") +
+                scale_x_discrete(limits = c("Claroideoglomus","Glomus","Paraglomus","Rhizoglomus","Rhizophagus","Septoglomus",
+"Cladosporium","Mycochaetophora", "Olpidium","Pyrenochaeta", "Verticillium", "Vishniacozyma", "Other", "Rhizoglomus (SAF22)")) +
+                ggtitle("High MGR fields") +
+               theme(axis.text = element_text(size = 11),
+                            legend.text = element_text(size = 11),
+                            legend.title = element_text(size = 11),
+                            axis.title= element_text(size=11),
+                            plot.title = element_text(size = 11, face = "bold"), 
+                            legend.position = "right")+
+                scale_shape_manual(values = c(16,18,17,15)) +
+                scale_color_manual(values = c("#44AA99","#56B4E9","#999999","#D55E00"))
+
+```
+
+
+```{r deseq low MGR, echo=FALSE, warning=FALSE, message=FALSE}
+
+physeq_low <- subset_samples(physeq, MGR_cat == "Low")
+physeq_low_pruned <- prune_taxa(taxa_sums(physeq_low) > 0, physeq)
+rarefied_low_rarefied = rarefy_even_depth(physeq_low_pruned, 
+                  sample.size = min(sample_sums(physeq_low_pruned)),
+                  rngseed = 711)
+otu_table(rarefied_low_rarefied) <- otu_table(rarefied_low_rarefied) + 1
+
+physeq_low_deseq = phyloseq_to_deseq2(rarefied_low_rarefied, ~ Treatment)
+physeq_low_deseq = DESeq(physeq_low_deseq, test="Wald", fitType="parametric")
+
+
+res_low = results(physeq_low_deseq, cooksCutoff = FALSE)
+alpha = 0.1
+sigtab = res_low[which(res_low$padj < alpha), ]
+sigtab = cbind(as(sigtab, "data.frame"), as(tax_table(rarefied_low_rarefied)[rownames(sigtab), ], "matrix"))
+head(sigtab)
+
+write.csv(sigtab, "../MGR/results/Deseq_root_low_MGR.csv", row.names = T)
+```
+
+```{r deseq low MGR ggplot, echo=FALSE, warning=FALSE, message=FALSE}
+
+#guild (Native AMF, Inoculated AMF, Pathogen, Other) information added to deseq results in excel
+
+sigtab <- read.csv("../MGR/data/Deseq_root_low_MGR_guild.csv", row.names=1)
+
+# Genus order
+x = tapply(sigtab$log2FoldChange, sigtab$Genus, function(x) max(x))
+x = sort(x, TRUE)
+sigtab$Genus = factor(as.character(sigtab$Genus), levels=names(x))
+
+# Guild order
+x = tapply(sigtab$log2FoldChange, sigtab$Guild, function(x) max(x))
+x = sort(x, TRUE)
+sigtab$Guild = factor(as.character(sigtab$Guild), levels=names(x))
+
+
+
+p_deseq_low <- ggplot(sigtab, aes(x=Genus, y=log2FoldChange, color=Guild, shape=Guild)) +
+                      theme_bw() +                  
+                      theme(axis.text.x = element_text(angle = -90, hjust = 0, vjust=0.5)) +
+                      ylim(-3, 7.5)+
+                      geom_point(size=5)+
+                      geom_hline(yintercept=1, linetype="dashed", color = "black") +
+                      geom_hline(yintercept=-1, linetype="dashed", color = "black") +
+                      geom_hline(yintercept=0, color = "black") +
+                      scale_x_discrete(limits = c( "Dominikia", "Funneliformis", "Glomus", "Paraglomus", "Rhizophagus","Septoglomus","Verticillium", "Other", "Rhizoglomus (SAF22)"))  +
+                      ggtitle("Low MGR fields") +
+                      theme(axis.text = element_text(size = 11),
+                            legend.text = element_text(size = 11),
+                            legend.title = element_text(size = 11),
+                            axis.title= element_text(size=11),
+                            plot.title = element_text(size = 11, face = "bold"), 
+                            legend.position = "none")+
+                      scale_shape_manual(values = c(16,18,17,15)) +
+                      scale_color_manual(values = c("#44AA99","#56B4E9","#999999","#D55E00"))
+ 
+```
+
+```{r Fig.6 deseq plot, echo=FALSE, warning=FALSE, message=FALSE}
+
+p_deseq <- ggarrange(p_deseq_low, p_deseq_high, ncol = 2, nrow = 1, widths = c(0.5, 1))
+
+ggsave("../MGR/plots/Fig6.jpg",
+  plot = p_deseq,
+  width = 20,
+  height = 12,
+  units = "cm",
+  dpi = 800 )
+
+```
+
+
+
+#8. Fertilisation trial
+
+```{r fertilisation, echo=FALSE, warning=FALSE, message=FALSE}
+
+data <-read.csv("../MGR/data/biomass2018.csv") %>%
+       dplyr::select(field,fertilizer,fungi,
+                     block,dry_weight_shoot) %>%
+       rename("Fertiliser"=fertilizer) %>%
+       filter(!is.na(dry_weight_shoot)) %>%
+       mutate(fungi = fct_relevel(fungi, "CTL", "AMF"))
+
+
+#calculate mean biomass per treatment and soil
+
+mean_biomass_field <- data %>% group_by(field, Fertiliser, fungi) %>% 
+                      dplyr::summarise(mean = mean(dry_weight_shoot)) %>%
+                      spread(fungi, mean) %>% 
+                      mutate("mean_CTL" =CTL, "mean_AMF" =AMF, .keep = "unused")
+
+
+# from long to wide format
+biomass_field <-pivot_wider(data, 
+                            names_from = "fungi", 
+                            values_from  = "dry_weight_shoot")
+
+# combine mean with individual variable
+MGR_field <- left_join(biomass_field, mean_biomass_field, by = c("field" = "field", "Fertiliser"="Fertiliser"))
+
+# add a column with the difference of I (biomass of inoculated plants) - C_mean
+MGR_field <- MGR_field %>%
+             group_by(field, Fertiliser) %>%
+             mutate(diff = AMF-mean_CTL) %>%
+             mutate (equation1 = 100*(1-mean_CTL/AMF)) %>%
+             mutate (equation2 = 100*(-1+AMF/mean_CTL)) %>%
+             mutate (MGR = if_else(diff>0, equation1, equation2))
+
+write.csv(MGR_field, "results/MGR_fertiliser.csv")
+
+
+p_MGR <- ggplot(MGR_field,
+                        aes(x=Fertiliser, y=MGR, fill=Fertiliser)) +
+                        geom_boxplot() +
+                        facet_grid(cols=vars(field))+
+                        theme_bw() +
+                        labs(y= "Mycorhizal growth response [%]", x = "Field") +
+                        theme(axis.title.x = element_text(size = 20),
+                        axis.text.y = element_text(size = 20),
+                        legend.text = element_text(size = 20),
+                        legend.title = element_text(size = 20),
+                        axis.title=element_text(size=20),
+                        strip.text.y = element_blank(),
+                        strip.text.x=element_text(size=20),
+                        axis.ticks.x = element_blank(),
+                        axis.text.x = element_blank()) +
+                        geom_rect(data=subset(MGR_field, field=="F17"), aes(xmin = -Inf, xmax = Inf, ymin = -Inf, ymax = Inf), size=3, fill=NA, color="black") +
+  geom_rect(data=subset(MGR_field, field=="F21"), aes(xmin = -Inf, xmax = Inf, ymin = -Inf, ymax = Inf), size=3, fill=NA, color="black") +
+  geom_rect(data=subset(MGR_field, field=="F10"), aes(xmin = -Inf, xmax = Inf, ymin = -Inf, ymax = Inf), size=3, fill=NA, color="black") 
+    
+ 
+p_MGR
+
+
+ggsave("plots/SupFig1_fertiliser.jpg",
+  plot = p_MGR,
+  width = 50,
+  height = 25,
+  units = "cm",
+    dpi = 600
+  )  
+  
+```
+
+```{r fertilisation model,  echo=FALSE, warning=FALSE, message=FALSE}
+
+
+model <- lm(MGR ~ field + Fertiliser + field*Fertiliser,   data = MGR_field)
+
+anova(model)
+summary(model)
+plot(model)
+
+```
